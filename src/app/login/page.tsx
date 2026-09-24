@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 import { createClient } from "@/lib/supabase/client";
 
 export default function LoginPage() {
@@ -36,6 +37,14 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#f9f9f7] px-4">
       <div className="w-full max-w-sm bg-[#fcfcfb] border border-[#e1e0d9] rounded-xl p-8 text-center">
+        <Image
+          src="/gsa-logo.png"
+          alt="GSA Business Development"
+          width={400}
+          height={131}
+          priority
+          className="h-14 w-auto mx-auto mb-5"
+        />
         <h1 className="text-lg font-semibold text-[#0b0b0b] mb-1">GSA Timesheet</h1>
         <p className="text-sm text-[#898781] mb-6">
           Sign in with your Workspace Google account to continue.

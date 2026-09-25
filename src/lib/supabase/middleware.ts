@@ -45,5 +45,18 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
+  // Pass the already-verified user id to Server Components via a request
+  // header, so getCurrentAgent() doesn't need to re-verify the session with
+  // a second network round trip to Supabase Auth on every single request.
+  if (user) {
+    const headers = new Headers(request.headers);
+    headers.set("x-user-id", user.id);
+    const finalResponse = NextResponse.next({ request: { headers } });
+    supabaseResponse.cookies.getAll().forEach((c) => {
+      finalResponse.cookies.set(c.name, c.value, c);
+    });
+    return finalResponse;
+  }
+
   return supabaseResponse;
 }

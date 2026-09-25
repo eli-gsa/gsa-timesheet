@@ -84,3 +84,44 @@ export async function clearSlots(agentId: string, cells: CellRef[]) {
 
   revalidatePath("/timesheet");
 }
+
+// Read-only: per-project half-hour counts + the standard work day length (in
+// hours), for the Project Summary modal's own month navigation (independent
+// of the page's own month) - it needs to fetch totals for whatever month the
+// modal is currently showing, on demand.
+export async function getAgentMonthTotals(
+  agentId: string,
+  ym: string
+): Promise<{ totals: Record<string, number>; standardDayHours: number }> {
+  const me = await getCurrentAgent();
+  if (!me) throw new Error("Not signed in");
+  if (me.id !== agentId && me.role !== "admin") throw new Error("Not allowed");
+
+  const supabase = await createClient();
+  const [y, m] = ym.split("-").map(Number);
+  const monthStart = `${ym}-01`;
+  const monthEnd = `${ym}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`;
+
+  const [{ data: entries }, { data: setting }] = await Promise.all([
+    supabase
+      .from("timesheet_entries")
+      .select("project_id")
+      .eq("agent_id", agentId)
+      .gte("entry_date", monthStart)
+      .lte("entry_date", monthEnd),
+    supabase.from("settings").select("value").eq("key", "standard_work_day").maybeSingle(),
+  ]);
+
+  const totals: Record<string, number> = {};
+  for (const e of entries ?? []) {
+    totals[e.project_id] = (totals[e.project_id] ?? 0) + 1; // half-hours
+  }
+
+  const win = (setting?.value as { startSlot: number; endSlot: number } | undefined) ?? {
+    startSlot: 16,
+    endSlot: 34,
+  };
+  const standardDayHours = Math.max(0.5, (win.endSlot - win.startSlot) * 0.5);
+
+  return { totals, standardDayHours };
+}

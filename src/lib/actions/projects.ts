@@ -68,28 +68,28 @@ export async function setProjectAssignment(projectId: string, agentId: string, a
   revalidatePath("/timesheet");
 }
 
-export async function addRate(agentId: string, projectId: string, rate: number, effectiveFrom: string) {
+// Hard delete: permanently removes the project and, via ON DELETE CASCADE,
+// its agent assignments, timesheet entries, and leads. The audit trail is
+// preserved (audit_log.project_id is ON DELETE SET NULL) - the audit entry
+// is written *before* the delete for the same reason as deleteAgent().
+export async function deleteProject(projectId: string) {
   const me = await requireAdmin();
   const supabase = await createClient();
-  const { error } = await supabase
-    .from("rates")
-    .insert({ agent_id: agentId, project_id: projectId, rate, effective_from: effectiveFrom });
-  if (error) throw new Error(error.message);
+  const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).maybeSingle();
+
   await logAudit(supabase, {
     actorId: me.id,
-    agentId,
     projectId,
-    field: "rate_added",
-    newValue: `${rate} from ${effectiveFrom}`,
+    field: "project_deleted",
+    oldValue: project?.name ?? projectId,
+    newValue: "Deleted permanently",
   });
-  revalidatePath("/projects");
-}
 
-export async function deleteRate(rateId: string) {
-  const me = await requireAdmin();
-  const supabase = await createClient();
-  const { error } = await supabase.from("rates").delete().eq("id", rateId);
+  const { error } = await supabase.from("projects").delete().eq("id", projectId);
   if (error) throw new Error(error.message);
-  await logAudit(supabase, { actorId: me.id, field: "rate_removed", oldValue: rateId });
+
   revalidatePath("/projects");
+  revalidatePath("/timesheet");
+  revalidatePath("/reports");
+  revalidatePath("/");
 }

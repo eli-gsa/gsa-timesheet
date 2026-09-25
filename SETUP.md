@@ -1,11 +1,11 @@
 # GSA Timesheet — go-live setup
 
 Everything that can be built without your accounts has been built: the full
-Next.js app (timesheet grid, agents, projects & rates, reports/CSV export,
-audit log, settings, Google sign-in) and the complete Supabase database
-schema with row-level security. What's left is account creation and a
-handful of values only you can provide — there's no more code to write to
-reach a working live site.
+Next.js app (timesheet grid, agents, projects, reports/CSV export, audit
+log, settings, Google sign-in) and the complete Supabase database schema
+with row-level security. What's left is account creation and a handful of
+values only you can provide — there's no more code to write to reach a
+working live site.
 
 Total hands-on time: roughly 30–45 minutes.
 
@@ -21,12 +21,15 @@ Total hands-on time: roughly 30–45 minutes.
 2. In **Project Settings → API**, copy:
    - `Project URL` → this is `NEXT_PUBLIC_SUPABASE_URL`
    - `anon` `public` key → this is `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-3. In the Supabase SQL Editor, run the three migration files **in order**:
+3. In the Supabase SQL Editor, run the migration files **in order**:
    - `supabase/migrations/0001_schema.sql`
    - `supabase/migrations/0002_rls.sql`
    - `supabase/migrations/0003_seed.sql` — **edit the two placeholder values
      at the top first**: your real Workspace domain and your real admin
      email. Without this step nobody can sign in.
+   - `supabase/migrations/0004_drop_rates.sql` — removes the rates feature
+     (table + policies) entirely, per later decision; skip this one only if
+     you're setting up before that change and want rates for some reason.
 
 ## 2. Create a Google OAuth client (for Workspace sign-in)
 
@@ -85,8 +88,6 @@ NEXT_PUBLIC_WORKSPACE_DOMAIN=yourcompany.com
   ("Project X × 20 slot(s)"), not 20 separate rows. This keeps the audit
   table from exploding on ordinary use; say the word if you'd rather have
   per-cell granularity.
-- **Overview's project chart is a simple bar list**, not the prototype's
-  zoomable bar/pie/line chart switcher. Easy to extend later if wanted.
 - **Adding a brand-new agent happens by them signing in**, not through an
   "Add agent" form in the app — matches the decided model (you provision the
   email on Google Workspace; they appear here on first login). You *can*
@@ -94,8 +95,18 @@ NEXT_PUBLIC_WORKSPACE_DOMAIN=yourcompany.com
   **Settings** page without touching SQL again after initial setup.
 - **Historical data import**: not started — you mentioned you'll provide
   the historical spreadsheet later. Once you have it, send it over and it
-  can be loaded straight into `timesheet_entries` (and `leads`/`rates` if
-  it covers those) via a one-off script against the Supabase database.
+  can be loaded straight into `timesheet_entries` and `leads` via a one-off
+  script against the Supabase database.
+- **Rates were removed entirely** (by decision, not oversight) — no rates
+  table, no rate UI, no Rate/Amount columns in the CSV export. If a rates
+  feature ever comes back, it'd need to be rebuilt from scratch.
+
+Everything else — the Overview page's zoomable bar/pie project chart and
+daily-hours line chart, the "N projects" / Project Summary / Leads buttons
+and their modals, the per-timesheet view-window editor, and the Agents/
+Projects/Reports tabs (search, active/archived toggle, assigned-agent and
+assigned-project modals with links, Archive vs. permanent Delete) — now
+matches the prototype's behaviour.
 
 ## What's still genuinely a decision, not a default
 

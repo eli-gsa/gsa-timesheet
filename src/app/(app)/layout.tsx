@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import Image from "next/image";
 import { getCurrentAgent } from "@/lib/data";
 import { signOut } from "@/lib/actions/auth";
 import NavLinks from "./NavLinks";
@@ -28,7 +29,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <div className="h-full flex flex-col">
       <header className="flex items-center gap-3 flex-wrap px-4 py-2.5 border-b border-[#e1e0d9] bg-[#fcfcfb]">
-        <div className="flex items-center gap-2 mr-auto">
+        <div className="flex items-center gap-2.5 mr-auto">
+          <Image src="/gsa-logo.png" alt="GSA Business Development" width={400} height={131} priority className="h-[26px] w-auto" />
           <h1 className="text-[15px] font-semibold tracking-tight">GSA Timesheet</h1>
         </div>
         <div className="flex items-center gap-2 text-[12.5px] text-[#52514e]">

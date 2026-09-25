@@ -13,3 +13,13 @@
 body {
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
+
+/* Flash highlight for a table row jumped to via a modal link (see
+   useRowHighlight.ts) - mirrors the prototype's tr.flash. */
+tr {
+  transition: background-color 1.1s ease;
+}
+tr.flash-row {
+  background-color: #e8f0fb !important;
+  transition: background-color 0.15s ease;
+}

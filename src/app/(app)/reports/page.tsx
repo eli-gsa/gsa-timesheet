@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/data";
-import type { Agent, Project, Rate, TimesheetEntry } from "@/lib/types";
+import type { Agent, Project, TimesheetEntry } from "@/lib/types";
 import ReportsClient from "./ReportsClient";
 
 function defaultFrom() {
@@ -34,11 +34,10 @@ export default async function ReportsPage({
   if (params.agent && params.agent !== "all") query = query.eq("agent_id", params.agent);
   if (params.project && params.project !== "all") query = query.eq("project_id", params.project);
 
-  const [{ data: entries }, { data: agents }, { data: projects }, { data: rates }] = await Promise.all([
+  const [{ data: entries }, { data: agents }, { data: projects }] = await Promise.all([
     query,
     supabase.from("agents").select("*").order("name"),
     supabase.from("projects").select("*").order("name"),
-    supabase.from("rates").select("*"),
   ]);
 
   return (
@@ -46,7 +45,6 @@ export default async function ReportsPage({
       entries={(entries as TimesheetEntry[]) ?? []}
       agents={(agents as Agent[]) ?? []}
       projects={(projects as Project[]) ?? []}
-      rates={(rates as Rate[]) ?? []}
       from={from}
       to={to}
       agentFilter={params.agent || "all"}

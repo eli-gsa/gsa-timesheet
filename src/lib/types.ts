@@ -26,15 +26,6 @@ export interface ProjectAgent {
   agent_id: string;
 }
 
-export interface Rate {
-  id: string;
-  agent_id: string;
-  project_id: string;
-  rate: number;
-  effective_from: string; // date
-  created_at: string;
-}
-
 export interface TimesheetEntry {
   id: string;
   agent_id: string;

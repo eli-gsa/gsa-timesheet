@@ -86,29 +86,29 @@ export async function clearSlots(agentId: string, cells: CellRef[]) {
 }
 
 // Read-only: per-project half-hour counts + the standard work day length (in
-// hours), for the Project Summary modal's own month navigation (independent
-// of the page's own month) - it needs to fetch totals for whatever month the
-// modal is currently showing, on demand.
-export async function getAgentMonthTotals(
+// hours), for the Project Summary modal's own month/week navigation
+// (independent of the page's own range) - it needs to fetch totals for
+// whatever range the modal is currently showing, on demand. Takes an
+// explicit [startDate, endDate] range (inclusive) rather than a calendar
+// month so the same action serves both Month view and Week view.
+export async function getAgentRangeTotals(
   agentId: string,
-  ym: string
+  startDate: string,
+  endDate: string
 ): Promise<{ totals: Record<string, number>; standardDayHours: number }> {
   const me = await getCurrentAgent();
   if (!me) throw new Error("Not signed in");
   if (me.id !== agentId && me.role !== "admin") throw new Error("Not allowed");
 
   const supabase = await createClient();
-  const [y, m] = ym.split("-").map(Number);
-  const monthStart = `${ym}-01`;
-  const monthEnd = `${ym}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`;
 
   const [{ data: entries }, { data: setting }] = await Promise.all([
     supabase
       .from("timesheet_entries")
       .select("project_id")
       .eq("agent_id", agentId)
-      .gte("entry_date", monthStart)
-      .lte("entry_date", monthEnd),
+      .gte("entry_date", startDate)
+      .lte("entry_date", endDate),
     supabase.from("settings").select("value").eq("key", "standard_work_day").maybeSingle(),
   ]);
 

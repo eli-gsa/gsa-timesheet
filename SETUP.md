@@ -30,6 +30,8 @@ Total hands-on time: roughly 30–45 minutes.
    - `supabase/migrations/0004_drop_rates.sql` — removes the rates feature
      (table + policies) entirely, per later decision; skip this one only if
      you're setting up before that change and want rates for some reason.
+   - `supabase/migrations/0005_timesheet_view.sql` — adds the per-agent
+     Month/Week timesheet view preference.
 
 ## 2. Create a Google OAuth client (for Workspace sign-in)
 
@@ -107,6 +109,21 @@ and their modals, the per-timesheet view-window editor, and the Agents/
 Projects/Reports tabs (search, active/archived toggle, assigned-agent and
 assigned-project modals with links, Archive vs. permanent Delete) — now
 matches the prototype's behaviour.
+
+## Beyond the prototype
+
+- **Week view on the Timesheet page.** Agents can toggle between Month and
+  Week; the choice is saved per agent (so it sticks next time they sign in).
+  Week view inherits the same view-window hours as Month view, just over 7
+  days instead of the whole month. Project Summary's own nav matches
+  whichever mode the grid was in when you opened it; Leads stays scoped to
+  the calendar month either way (there's no weekly lead-tracking concept in
+  the data model).
+- **App-wide busy overlay.** Any in-flight save (assigning cells, editing a
+  lead, archiving a project, etc.) now dims the screen and shows a spinner
+  until it resolves, so you can't fire off a second action while the first
+  is still in flight. One shared mechanism (`src/components/BusyOverlay.tsx`)
+  drives this everywhere rather than each page having its own.
 
 ## What's still genuinely a decision, not a default
 

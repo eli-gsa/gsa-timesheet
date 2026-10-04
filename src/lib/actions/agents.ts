@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { requireAdmin, requireAgent } from "@/lib/data";
 import { logAudit } from "@/lib/audit";
-import type { Role } from "@/lib/types";
+import type { Role, TimesheetView } from "@/lib/types";
 
 export async function updateAgentRole(agentId: string, role: Role) {
   const me = await requireAdmin();
@@ -71,6 +71,24 @@ export async function updateAgentViewWindow(agentId: string, startSlot: number, 
   });
 
   revalidatePath("/team");
+  revalidatePath("/timesheet");
+}
+
+// Self-service: an agent's Month/Week timesheet grid preference, persisted
+// so it sticks across sessions/devices, same pattern as the view window.
+export async function updateTimesheetView(agentId: string, view: TimesheetView) {
+  const me = await requireAgent();
+  if (me.id !== agentId && me.role !== "admin") {
+    throw new Error("Not authorized to edit this agent's timesheet view.");
+  }
+  if (view !== "month" && view !== "week") {
+    throw new Error("Invalid timesheet view");
+  }
+  const supabase = await createClient();
+
+  const { error } = await supabase.from("agents").update({ timesheet_view: view }).eq("id", agentId);
+  if (error) throw new Error(error.message);
+
   revalidatePath("/timesheet");
 }
 

@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { LeadType, StandardWorkDay } from "@/lib/types";
 import { addLeadType, removeLeadType, updateStandardWorkDay } from "@/lib/actions/settings";
 import { addAdminEmail, addAllowedDomain, removeAdminEmail, removeAllowedDomain } from "@/lib/actions/agents";
+import { useBusyTransition } from "@/components/BusyOverlay";
 
 function slotToTime(slot: number) {
   const h = Math.floor(slot / 2);
@@ -24,7 +25,7 @@ export default function SettingsClient({
   adminEmails: string[];
 }) {
   const router = useRouter();
-  const [isPending, startTransition] = useTransition();
+  const [isPending, startTransition] = useBusyTransition();
   const [newType, setNewType] = useState("");
   const [start, setStart] = useState(standardWorkDay.startSlot);
   const [end, setEnd] = useState(standardWorkDay.endSlot);

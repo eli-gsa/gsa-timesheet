@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useMemo, useState, useTransition } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Agent, Project, ProjectAgent, TimesheetEntry } from "@/lib/types";
 import {
@@ -12,6 +12,7 @@ import {
 } from "@/lib/actions/projects";
 import Modal, { ListRow, ModalButton, RoleBadge } from "@/components/Modal";
 import { useRowHighlight } from "@/components/useRowHighlight";
+import { useBusyTransition } from "@/components/BusyOverlay";
 
 const DEFAULT_PALETTE = ["#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948", "#2a78d6"];
 
@@ -28,7 +29,7 @@ export default function ProjectsPanel({
 }) {
   const router = useRouter();
   useRowHighlight("data-proj-row");
-  const [isPending, startTransition] = useTransition();
+  const [isPending, startTransition] = useBusyTransition();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"active" | "archived">("active");
   const [showAdd, setShowAdd] = useState(false);
@@ -279,7 +280,7 @@ function ProjectEditForm({
   assignments: ProjectAgent[];
   onChanged: () => void;
 }) {
-  const [isPending, startTransition] = useTransition();
+  const [isPending, startTransition] = useBusyTransition();
   const [name, setName] = useState(project.name);
   const [color, setColor] = useState(project.color);
   const assignedIds = new Set(assignments.map((a) => a.agent_id));
@@ -361,7 +362,7 @@ function AssignedAgentsModal({
   onClose: () => void;
 }) {
   const router = useRouter();
-  const [isPending, startTransition] = useTransition();
+  const [isPending, startTransition] = useBusyTransition();
   const assigned = agents.filter((a) => assignments.some((asg) => asg.agent_id === a.id));
 
   function gotoAgent(agentId: string) {

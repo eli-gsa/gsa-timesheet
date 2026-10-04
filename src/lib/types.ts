@@ -1,6 +1,7 @@
 // Shared types mirroring the Supabase schema in supabase/migrations/0001_schema.sql
 
 export type Role = "admin" | "agent";
+export type TimesheetView = "month" | "week";
 
 export interface Agent {
   id: string;
@@ -10,6 +11,7 @@ export interface Agent {
   active: boolean;
   view_start_slot: number;
   view_end_slot: number;
+  timesheet_view: TimesheetView;
   created_at: string;
 }
 

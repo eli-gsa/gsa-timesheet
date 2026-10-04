@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Agent, Project, ProjectAgent, Role } from "@/lib/types";
 import { fmtHours } from "@/lib/types";
 import { deleteAgent, setAgentActive, updateAgentRole } from "@/lib/actions/agents";
 import Modal, { ListRow, ModalButton } from "@/components/Modal";
 import { useRowHighlight } from "@/components/useRowHighlight";
+import { useBusyTransition } from "@/components/BusyOverlay";
 
 export default function TeamTable({
   agents,
@@ -23,7 +24,7 @@ export default function TeamTable({
 }) {
   const router = useRouter();
   useRowHighlight("data-team-row");
-  const [isPending, startTransition] = useTransition();
+  const [isPending, startTransition] = useBusyTransition();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"active" | "archived">("active");
   const [assignedProjectsFor, setAssignedProjectsFor] = useState<Agent | null>(null);

@@ -1,17 +1,14 @@
 import { createClient } from "@/lib/supabase/server";
 import { requireAgent } from "@/lib/data";
 import TimesheetGrid from "./TimesheetGrid";
-import type { Agent, Lead, LeadType, Project, TimesheetEntry, TimesheetView } from "@/lib/types";
+import { todayIn } from "@/lib/timezones";
+import type { Agent, GridView, Lead, LeadType, Project, TimesheetEntry } from "@/lib/types";
 
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
 }
 function dkey(d: Date): string {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-}
-function currentYm(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
 }
 // Monday of the week containing d (ISO-style week start).
 function mondayOf(d: Date): Date {
@@ -30,7 +27,7 @@ function addDaysStr(dateStr: string, n: number): string {
 export default async function TimesheetPage({
   searchParams,
 }: {
-  searchParams: Promise<{ agent?: string; month?: string; view?: string; week?: string }>;
+  searchParams: Promise<{ agent?: string; month?: string; view?: string; week?: string; day?: string }>;
 }) {
   const me = await requireAgent();
   const params = await searchParams;
@@ -42,14 +39,22 @@ export default async function TimesheetPage({
   let viewingId = me.id;
   if (me.role === "admin" && params.agent) viewingId = params.agent;
 
-  const [{ data: viewingAgent }, { data: allAgents }, { data: allProjects }, { data: assignments }] =
+  const [
+    { data: viewingAgent },
+    { data: allAgents },
+    { data: allProjects },
+    { data: assignments },
+    { data: projectTotals },
+  ] =
     await Promise.all([
       supabase.from("agents").select("*").eq("id", viewingId).maybeSingle(),
       me.role === "admin"
         ? supabase.from("agents").select("*").order("name")
         : Promise.resolve({ data: null }),
       supabase.from("projects").select("*").eq("active", true).order("name"),
-      supabase.from("project_agents").select("project_id, agent_id").eq("agent_id", viewingId),
+      supabase.from("project_agents").select("project_id, agent_id, allocated_hours").eq("agent_id", viewingId),
+      // All-time half-hours per project, for the allocation countdown.
+      supabase.rpc("agent_project_totals", { p_agent: viewingId }),
     ]);
 
   const viewing: Agent = (viewingAgent as Agent) ?? me;
@@ -60,26 +65,56 @@ export default async function TimesheetPage({
 
   // Resolve the active view: an explicit ?view= wins, otherwise fall back to
   // the agent's own persisted preference (set via the Month/Week toggle).
-  const view: TimesheetView = params.view === "week" ? "week" : params.view === "month" ? "month" : viewing.timesheet_view;
+  // "day" is URL-only (never persisted as an agent's default).
+  const view: GridView =
+    params.view === "day"
+      ? "day"
+      : params.view === "week"
+      ? "week"
+      : params.view === "month"
+      ? "month"
+      : viewing.timesheet_view;
 
-  const month = params.month || currentYm();
+  // "Today" is the viewed agent's local date (their timezone, set by an
+  // admin on the Team page), so the default month/week roll over at their
+  // midnight rather than the server's. No timezone set = server date, as before.
+  const today = todayIn(viewing.timezone);
+  const month = params.month || today.slice(0, 7);
   const [y, m] = month.split("-").map(Number);
   const monthStart = `${month}-01`;
   const monthEnd = `${month}-${pad2(new Date(y, m, 0).getDate())}`;
 
-  const weekStart = params.week || dkey(mondayOf(new Date()));
+  const weekStart = params.week || dkey(mondayOf(new Date(`${today}T00:00:00`)));
   const weekEnd = addDaysStr(weekStart, 6);
+
+  const day = params.day && /^\d{4}-\d{2}-\d{2}$/.test(params.day) ? params.day : today;
+
+  // Allocation countdown: hours allocated per project (admin-set) next to
+  // all-time hours logged on it by this agent.
+  const loggedHH = new Map<string, number>(
+    ((projectTotals as { project_id: string; half_hours: number }[] | null) ?? []).map((r) => [
+      r.project_id,
+      Number(r.half_hours),
+    ])
+  );
+  const allocations: Record<string, { allocated: number | null; loggedHH: number }> = {};
+  for (const a of assignments ?? []) {
+    allocations[a.project_id] = {
+      allocated: a.allocated_hours === null || a.allocated_hours === undefined ? null : Number(a.allocated_hours),
+      loggedHH: loggedHH.get(a.project_id) ?? 0,
+    };
+  }
 
   // The visible grid range: the whole calendar month, or just the 7 days of
   // the active week (which may straddle two months) - only this range's
   // entries need to be fetched, not the whole month regardless of view.
-  const rangeStart = view === "week" ? weekStart : monthStart;
-  const rangeEnd = view === "week" ? weekEnd : monthEnd;
+  const rangeStart = view === "day" ? day : view === "week" ? weekStart : monthStart;
+  const rangeEnd = view === "day" ? day : view === "week" ? weekEnd : monthEnd;
 
   // Leads are tracked per calendar month (not per week - there's no weekly
   // lead-tracking concept in the data model), so in Week view they're scoped
   // to the month containing the visible week's first day.
-  const leadsPeriod = view === "week" ? weekStart.slice(0, 7) : month;
+  const leadsPeriod = view === "day" ? day.slice(0, 7) : view === "week" ? weekStart.slice(0, 7) : month;
 
   const [{ data: entries }, { data: leads }, { data: leadTypes }] = await Promise.all([
     supabase
@@ -101,6 +136,8 @@ export default async function TimesheetPage({
       view={view}
       month={month}
       weekStart={weekStart}
+      day={day}
+      allocations={allocations}
       projects={myProjects}
       entries={(entries as TimesheetEntry[]) ?? []}
       leads={(leads as Lead[]) ?? []}

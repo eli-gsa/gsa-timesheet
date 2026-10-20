@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Agent, Project, ProjectAgent, Role } from "@/lib/types";
 import { fmtHours } from "@/lib/types";
-import { deleteAgent, setAgentActive, updateAgentRole } from "@/lib/actions/agents";
+import { deleteAgent, setAgentActive, updateAgentRole, updateAgentTimezone } from "@/lib/actions/agents";
+import { allTimeZones } from "@/lib/timezones";
 import Modal, { ListRow, ModalButton } from "@/components/Modal";
 import { useRowHighlight } from "@/components/useRowHighlight";
 import { useBusyTransition } from "@/components/BusyOverlay";
@@ -30,6 +31,7 @@ export default function TeamTable({
   const [assignedProjectsFor, setAssignedProjectsFor] = useState<Agent | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Agent | null>(null);
   const hasHoursSet = new Set(agentIdsWithHours);
+  const zones = useMemo(() => allTimeZones(), []);
 
   function refresh() {
     router.refresh();
@@ -78,12 +80,21 @@ export default function TeamTable({
         </div>
       </div>
 
+      <datalist id="tz-options">
+        {zones.map((z) => (
+          <option key={z} value={z} />
+        ))}
+      </datalist>
+
       <div className="border border-[#e1e0d9] rounded-lg overflow-hidden">
         <table className="w-full text-[12.5px] border-collapse">
           <thead>
             <tr className="border-b border-[#c3c2b7] bg-[#f3f2ee]">
               <th className="text-left px-3 py-2 text-[11px] uppercase tracking-wide text-[#898781]">Name</th>
               <th className="text-left px-3 py-2 text-[11px] uppercase tracking-wide text-[#898781]">Role</th>
+              <th className="text-left px-3 py-2 text-[11px] uppercase tracking-wide text-[#898781]">
+                Timezone
+              </th>
               <th className="text-left px-3 py-2 text-[11px] uppercase tracking-wide text-[#898781]">
                 Assigned projects
               </th>
@@ -116,6 +127,20 @@ export default function TeamTable({
                       <option value="agent">agent</option>
                       <option value="admin">admin</option>
                     </select>
+                  </td>
+                  <td className="px-3 py-2">
+                    <TimezoneCell
+                      key={`${a.id}:${a.timezone ?? ""}`}
+                      agent={a}
+                      zones={zones}
+                      disabled={isPending}
+                      onSave={(tz) =>
+                        startTransition(async () => {
+                          await updateAgentTimezone(a.id, tz);
+                          refresh();
+                        })
+                      }
+                    />
                   </td>
                   <td className="px-3 py-2">
                     {assignedProjects.length ? (
@@ -161,7 +186,7 @@ export default function TeamTable({
             })}
             {list.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-3 py-6 text-center text-[#898781]">
+                <td colSpan={6} className="px-3 py-6 text-center text-[#898781]">
                   No {statusFilter} agents{search ? " match your search" : ""}.
                 </td>
               </tr>
@@ -200,6 +225,51 @@ export default function TeamTable({
             })
           }
         />
+      )}
+    </div>
+  );
+}
+
+// Type-to-search timezone picker (shares one <datalist> for the whole table).
+// Shows a Save button only once the draft differs from the saved value and
+// is a recognised zone; an empty box means "not set".
+function TimezoneCell({
+  agent,
+  zones,
+  disabled,
+  onSave,
+}: {
+  agent: Agent;
+  zones: string[];
+  disabled: boolean;
+  onSave: (tz: string | null) => void;
+}) {
+  const saved = agent.timezone ?? "";
+  const [draft, setDraft] = useState(saved);
+
+  const dirty = draft !== saved;
+  const valid = draft === "" || zones.includes(draft);
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <input
+        list="tz-options"
+        className={`rounded-md border bg-white px-2 py-1 text-[12.5px] w-[190px] ${
+          valid ? "border-[#c3c2b7]" : "border-[#d03b3b]"
+        }`}
+        placeholder="Not set"
+        value={draft}
+        disabled={disabled}
+        onChange={(e) => setDraft(e.target.value)}
+      />
+      {dirty && valid && (
+        <button
+          className="rounded-md bg-[#2a78d6] text-white px-2 py-1 text-[12px] font-semibold"
+          disabled={disabled}
+          onClick={() => onSave(draft === "" ? null : draft)}
+        >
+          Save
+        </button>
       )}
     </div>
   );

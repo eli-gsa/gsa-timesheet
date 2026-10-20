@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { requireAdmin, requireAgent } from "@/lib/data";
 import { logAudit } from "@/lib/audit";
 import type { Role, TimesheetView } from "@/lib/types";
+import { isValidTimeZone } from "@/lib/timezones";
 
 export async function updateAgentRole(agentId: string, role: Role) {
   const me = await requireAdmin();
@@ -89,6 +90,34 @@ export async function updateTimesheetView(agentId: string, view: TimesheetView) 
   const { error } = await supabase.from("agents").update({ timesheet_view: view }).eq("id", agentId);
   if (error) throw new Error(error.message);
 
+  revalidatePath("/timesheet");
+}
+
+// Admin-only: the IANA timezone (e.g. "Europe/London") that an agent's local
+// wall-clock entries are on. null clears it back to "not set". Entries
+// themselves never change - this only affects how they convert to UTC in
+// reporting and what "today" means for that agent. The agents_guard trigger
+// (0006) enforces admin-only at the database too.
+export async function updateAgentTimezone(agentId: string, timezone: string | null) {
+  const me = await requireAdmin();
+  if (timezone !== null && !isValidTimeZone(timezone)) {
+    throw new Error("Unknown timezone");
+  }
+  const supabase = await createClient();
+
+  const { data: existing } = await supabase.from("agents").select("timezone").eq("id", agentId).maybeSingle();
+  const { error } = await supabase.from("agents").update({ timezone }).eq("id", agentId);
+  if (error) throw new Error(error.message);
+
+  await logAudit(supabase, {
+    actorId: me.id,
+    agentId,
+    field: "timezone",
+    oldValue: existing?.timezone ?? null,
+    newValue: timezone ?? "(not set)",
+  });
+
+  revalidatePath("/team");
   revalidatePath("/timesheet");
 }
 

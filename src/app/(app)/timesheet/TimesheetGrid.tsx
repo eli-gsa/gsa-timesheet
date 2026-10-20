@@ -2,13 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { Agent, Lead, LeadType, Project, TimesheetEntry, TimesheetView } from "@/lib/types";
+import type { Agent, GridView, Lead, LeadType, Project, TimesheetEntry, TimesheetView } from "@/lib/types";
 import { contrastText, fmtHours, slotRangeLabel, slotTime } from "@/lib/types";
 import { assignSlots, clearSlots, getAgentRangeTotals } from "@/lib/actions/timesheet";
 import { addLead, deleteLead, updateLead } from "@/lib/actions/leads";
 import { updateAgentViewWindow, updateTimesheetView } from "@/lib/actions/agents";
 import Modal, { ModalButton } from "@/components/Modal";
 import { useBusyTransition } from "@/components/BusyOverlay";
+import { todayIn } from "@/lib/timezones";
 
 function daysInMonth(y: number, m: number) {
   return new Date(y, m, 0).getDate();
@@ -44,8 +45,22 @@ function mondayOfDate(d: Date) {
   r.setDate(r.getDate() + diff);
   return r;
 }
-function mondayOfToday() {
-  return dkey(mondayOfDate(new Date()));
+// Monday of the current week on the given timezone's calendar (null = browser).
+function mondayOfToday(tz: string | null) {
+  return dkey(mondayOfDate(new Date(`${todayIn(tz)}T00:00:00`)));
+}
+function currentYmIn(tz: string | null) {
+  return todayIn(tz).slice(0, 7);
+}
+export type Allocation = { allocated: number | null; loggedHH: number };
+
+function dayLong(date: string) {
+  return new Date(`${date}T00:00:00`).toLocaleDateString(undefined, {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
 }
 function weekLabel(weekStart: string) {
   const start = new Date(`${weekStart}T00:00:00`);
@@ -63,6 +78,8 @@ export default function TimesheetGrid({
   view,
   month,
   weekStart,
+  day,
+  allocations,
   projects,
   entries,
   leads,
@@ -71,9 +88,11 @@ export default function TimesheetGrid({
   me: Agent;
   viewing: Agent;
   agents: Agent[];
-  view: TimesheetView;
+  view: GridView;
   month: string;
   weekStart: string;
+  day: string;
+  allocations: Record<string, Allocation>;
   projects: Project[];
   entries: TimesheetEntry[];
   leads: Lead[];
@@ -106,6 +125,11 @@ export default function TimesheetGrid({
   // (the agent's view window), so switching views never changes which
   // hours are shown, only which days.
   const days = useMemo(() => {
+    if (view === "day") {
+      const d = new Date(`${day}T00:00:00`);
+      const wd = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()];
+      return [{ date: day, dayLabel: `${d.getDate()} ${wd}`, isWeekend: wd === "Sat" || wd === "Sun" }];
+    }
     if (view === "week") {
       return Array.from({ length: 7 }, (_, i) => {
         const date = addDaysStr(weekStart, i);
@@ -121,7 +145,7 @@ export default function TimesheetGrid({
       const wd = weekdayName(y, m, day);
       return { date, dayLabel: `${day} ${wd}`, isWeekend: wd === "Sat" || wd === "Sun" };
     });
-  }, [view, weekStart, month, y, m]);
+  }, [view, day, weekStart, month, y, m]);
 
   const entryMap = useMemo(() => {
     const map = new Map<string, TimesheetEntry>();
@@ -137,10 +161,18 @@ export default function TimesheetGrid({
 
   const totalHours = entries.length * 0.5;
 
+  // Day view's side table: half-hours per project for the one visible day
+  // (entries only ever holds that day when view === "day").
+  const dayByProject = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const e of entries) counts.set(e.project_id, (counts.get(e.project_id) ?? 0) + 1);
+    return counts;
+  }, [entries]);
+
   // Leads are tracked per calendar month, not per week (there's no weekly
   // lead-tracking concept in the data model) - in Week view they're scoped
   // to the month containing the visible week's first day.
-  const leadsPeriod = view === "week" ? weekStart.slice(0, 7) : month;
+  const leadsPeriod = view === "day" ? day.slice(0, 7) : view === "week" ? weekStart.slice(0, 7) : month;
 
   // A fixed total width (not just per-column widths) keeps every slot
   // column at exactly 92px regardless of how many are visible - a wide
@@ -150,40 +182,49 @@ export default function TimesheetGrid({
   const slotColWidth = 92;
   const tableWidth = dayColWidth + slots.length * slotColWidth;
 
-  function currentYm() {
-    const d = new Date();
-    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
-  }
-
-  function pushParams(extra: { month?: string; week?: string; view?: TimesheetView; agent?: string }) {
+  function pushParams(extra: { month?: string; week?: string; day?: string; view?: GridView; agent?: string }) {
     const sp = new URLSearchParams();
-    if (extra.view) sp.set("view", extra.view);
+    // Keep the current view across agent switches; navigation helpers pass
+    // the view they want explicitly.
+    sp.set("view", extra.view ?? view);
     sp.set("month", extra.month ?? month);
     sp.set("week", extra.week ?? weekStart);
+    sp.set("day", extra.day ?? day);
     if (me.role === "admin") sp.set("agent", extra.agent ?? viewing.id);
     router.push(`/timesheet?${sp.toString()}`);
   }
 
   function navMonth(delta: number) {
-    const next = delta === 0 ? currentYm() : addMonths(month, delta);
+    const next = delta === 0 ? currentYmIn(viewing.timezone) : addMonths(month, delta);
     setSelection(new Set());
     pushParams({ month: next, view: "month" });
   }
   function navWeek(delta: number) {
-    const next = delta === 0 ? mondayOfToday() : addDaysStr(weekStart, delta * 7);
+    const next = delta === 0 ? mondayOfToday(viewing.timezone) : addDaysStr(weekStart, delta * 7);
     setSelection(new Set());
     pushParams({ week: next, view: "week" });
   }
-  function switchView(next: TimesheetView) {
+  function navDay(delta: number) {
+    const next = delta === 0 ? todayIn(viewing.timezone) : addDaysStr(day, delta);
+    setSelection(new Set());
+    pushParams({ day: next, view: "day" });
+  }
+  function switchView(next: GridView) {
     if (next === view) return;
     setSelection(new Set());
-    pushParams({ view: next, week: next === "week" ? mondayOfToday() : undefined });
+    pushParams({
+      view: next,
+      week: next === "week" ? mondayOfToday(viewing.timezone) : undefined,
+      day: next === "day" ? todayIn(viewing.timezone) : undefined,
+    });
+    // The single-day view is a transient drill-down, not a default.
+    if (next === "day") return;
     // Best-effort persistence so this agent's next visit opens straight into
     // whichever view they just picked - the view has already switched via
     // the navigation above regardless of whether this save succeeds.
     startTransition(async () => {
       try {
-        await updateTimesheetView(viewing.id, next);
+        await updateTimesheetView(viewing.id, next as TimesheetView);
       } catch {
         // ignore
       }
@@ -245,6 +286,36 @@ export default function TimesheetGrid({
     });
   }
 
+  function renderSlotCell(date: string, s: number, width: number, height: number) {
+    const key = cellKey(date, s);
+    const entry = entryMap.get(key);
+    const project = entry ? projectById.get(entry.project_id) : undefined;
+    const selected = selection.has(key);
+    return (
+      <td
+        key={s}
+        onMouseDown={() => onCellMouseDown(date, s)}
+        onMouseEnter={() => onCellMouseEnter(date, s)}
+        className={`border border-[#e1e0d9] p-0 box-border ${canEdit ? "cursor-pointer" : "cursor-default"}`}
+        style={{
+          width,
+          height,
+          background: selected ? "color-mix(in srgb, #2a78d6 38%, white)" : project?.color ?? undefined,
+        }}
+        title={project?.name}
+      >
+        {project && (
+          <span
+            className="block w-full h-full px-1 text-[9.5px] font-medium overflow-hidden text-ellipsis whitespace-nowrap pointer-events-none"
+            style={{ color: contrastText(project.color), lineHeight: `${height - 2}px` }}
+          >
+            {project.name}
+          </span>
+        )}
+      </td>
+    );
+  }
+
   return (
     <div onMouseUp={endDrag} onMouseLeave={endDrag}>
       <div className="flex items-baseline justify-between gap-3 flex-wrap mb-4">
@@ -253,7 +324,7 @@ export default function TimesheetGrid({
             {isAdminViewingOther ? `${viewing.name}’s timesheet` : "My timesheet"}
           </h2>
           <p className="text-[12.5px] text-[#898781]">
-            {view === "week" ? weekLabel(weekStart) : monthLabel(month)} ·{" "}
+            {view === "day" ? dayLong(day) : view === "week" ? weekLabel(weekStart) : monthLabel(month)} ·{" "}
             <span className="tabular-nums">{fmtHours(totalHours)}h</span> logged
           </p>
         </div>
@@ -287,6 +358,12 @@ export default function TimesheetGrid({
             >
               Week
             </button>
+            <button
+              className={`px-2.5 py-1.5 border-l border-[#c3c2b7] ${view === "day" ? "bg-[#2a78d6] text-white" : "bg-white hover:bg-[#f3f2ee]"}`}
+              onClick={() => switchView("day")}
+            >
+              Day
+            </button>
           </div>
           {view === "month" ? (
             <>
@@ -299,6 +376,28 @@ export default function TimesheetGrid({
               <button className="rounded-md border border-[#c3c2b7] bg-white px-2.5 py-1.5 text-[13px] hover:bg-[#f3f2ee]" onClick={() => navMonth(1)}>
                 →
               </button>
+            </>
+          ) : view === "day" ? (
+            <>
+              <button className="rounded-md border border-[#c3c2b7] bg-white px-2.5 py-1.5 text-[13px] hover:bg-[#f3f2ee]" onClick={() => navDay(-1)}>
+                ←
+              </button>
+              <button className="rounded-md border border-[#c3c2b7] bg-white px-2.5 py-1.5 text-[13px] hover:bg-[#f3f2ee]" onClick={() => navDay(0)}>
+                Today
+              </button>
+              <button className="rounded-md border border-[#c3c2b7] bg-white px-2.5 py-1.5 text-[13px] hover:bg-[#f3f2ee]" onClick={() => navDay(1)}>
+                →
+              </button>
+              <input
+                type="date"
+                className="rounded-md border border-[#c3c2b7] bg-white px-2 py-1 text-[13px]"
+                value={day}
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  setSelection(new Set());
+                  pushParams({ day: e.target.value, view: "day" });
+                }}
+              />
             </>
           ) : (
             <>
@@ -355,6 +454,70 @@ export default function TimesheetGrid({
         </div>
       </div>
 
+      <AllocationStrip projects={projects} allocations={allocations} />
+
+      {view === "day" ? (
+        <div className="flex items-start gap-4 flex-wrap">
+          <div className="border border-[#e1e0d9] rounded-lg overflow-auto max-h-[70vh]">
+            <table
+              className="border-separate border-spacing-0 text-[12px] select-none"
+              style={{ tableLayout: "fixed", width: 78 + 300 }}
+            >
+              <thead>
+                <tr>
+                  <th className="sticky top-0 z-10 bg-[#f3f2ee] text-left px-3 py-1.5 border-b-2 border-r-2 border-[#c3c2b7]" style={{ width: 78 }}>
+                    Time
+                  </th>
+                  <th className="sticky top-0 z-10 bg-[#f3f2ee] text-left px-3 py-1.5 border-b-2 border-[#c3c2b7]" style={{ width: 300 }}>
+                    {days[0].dayLabel}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {slots.map((s) => (
+                  <tr key={s}>
+                    <td className="px-3 h-[26px] border-r-2 border-[#c3c2b7] bg-[#fcfcfb] text-[#52514e] tabular-nums whitespace-nowrap">
+                      {slotTime(s)}
+                    </td>
+                    {renderSlotCell(days[0].date, s, 300, 26)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="border border-[#e1e0d9] rounded-lg overflow-hidden min-w-[260px]">
+            <table className="w-full text-[12.5px] border-collapse">
+              <thead className="bg-[#f3f2ee]">
+                <tr>
+                  <th className="text-left px-2.5 py-1.5 text-[11px] uppercase text-[#898781]">Project</th>
+                  <th className="text-right px-2.5 py-1.5 text-[11px] uppercase text-[#898781]">Hours</th>
+                </tr>
+              </thead>
+              <tbody>
+                {projects.map((p) => {
+                  const hh = dayByProject.get(p.id) ?? 0;
+                  return (
+                    <tr key={p.id} className={`border-t border-[#e1e0d9] ${hh === 0 ? "text-[#898781]" : ""}`}>
+                      <td className="px-2.5 py-1">
+                        <span className="inline-flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: p.color }} />
+                          {p.name}
+                        </span>
+                      </td>
+                      <td className="px-2.5 py-1 text-right tabular-nums">{fmtHours(hh * 0.5)}</td>
+                    </tr>
+                  );
+                })}
+                <tr className="border-t border-[#e1e0d9] bg-[#f3f2ee]">
+                  <td className="px-2.5 py-1 font-semibold">Day total</td>
+                  <td className="px-2.5 py-1 text-right tabular-nums font-semibold">{fmtHours(totalHours)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
       <div className="border border-[#e1e0d9] rounded-lg overflow-auto max-h-[70vh]">
         <table
           className="border-separate border-spacing-0 text-[11.5px] select-none"
@@ -390,43 +553,13 @@ export default function TimesheetGrid({
                 >
                   {dayLabel}
                 </td>
-                {slots.map((s) => {
-                  const key = cellKey(date, s);
-                  const entry = entryMap.get(key);
-                  const project = entry ? projectById.get(entry.project_id) : undefined;
-                  const selected = selection.has(key);
-                  return (
-                    <td
-                      key={s}
-                      onMouseDown={() => onCellMouseDown(date, s)}
-                      onMouseEnter={() => onCellMouseEnter(date, s)}
-                      className={`h-[22px] border border-[#e1e0d9] p-0 box-border ${
-                        canEdit ? "cursor-pointer" : "cursor-default"
-                      }`}
-                      style={{
-                        width: slotColWidth,
-                        background: selected
-                          ? "color-mix(in srgb, #2a78d6 38%, white)"
-                          : project?.color ?? undefined,
-                      }}
-                      title={project?.name}
-                    >
-                      {project && (
-                        <span
-                          className="block w-full h-full leading-[20px] px-1 text-[9.5px] font-medium overflow-hidden text-ellipsis whitespace-nowrap pointer-events-none"
-                          style={{ color: contrastText(project.color) }}
-                        >
-                          {project.name}
-                        </span>
-                      )}
-                    </td>
-                  );
-                })}
+                {slots.map((s) => renderSlotCell(date, s, slotColWidth, 22))}
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      )}
 
       {/* Fixed/floating rather than inserted above the table, so selecting a
           cell never shifts the grid underneath it (that shift was the
@@ -507,8 +640,10 @@ export default function TimesheetGrid({
         <ProjectSummaryModal
           agentId={viewing.id}
           agentName={viewing.name}
-          view={view}
-          initialMonth={month}
+          timezone={viewing.timezone}
+          allocations={allocations}
+          view={view === "day" ? "month" : view}
+          initialMonth={view === "day" ? day.slice(0, 7) : month}
           initialWeekStart={weekStart}
           projects={projects}
           onClose={() => setSummaryOpen(false)}
@@ -580,6 +715,8 @@ function ProjectsModal({
 function ProjectSummaryModal({
   agentId,
   agentName,
+  timezone,
+  allocations,
   view,
   initialMonth,
   initialWeekStart,
@@ -588,6 +725,8 @@ function ProjectSummaryModal({
 }: {
   agentId: string;
   agentName: string;
+  timezone: string | null;
+  allocations: Record<string, Allocation>;
   view: TimesheetView;
   initialMonth: string;
   initialWeekStart: string;
@@ -637,19 +776,14 @@ function ProjectSummaryModal({
     const next =
       view === "week"
         ? delta === 0
-          ? mondayOfToday()
+          ? mondayOfToday(timezone)
           : addDaysStr(anchor, delta * 7)
         : delta === 0
-        ? currentYm()
+        ? currentYmIn(timezone)
         : addMonths(anchor, delta);
     setAnchor(next);
     load(next);
   }
-  function currentYm() {
-    const d = new Date();
-    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
-  }
-
   const { label } = rangeOf(anchor);
   const rows = projects.map((p) => {
     const hh = totals?.[p.id] ?? 0;
@@ -657,12 +791,16 @@ function ProjectSummaryModal({
     return { project: p, hh, hrs, days: hrs / standardDayHours };
   });
   const totHH = rows.reduce((a, r) => a + r.hh, 0);
+  // Allocation columns only appear once at least one project has an
+  // allocation. They're all-time, so they don't change as you page through
+  // months/weeks.
+  const showAlloc = projects.some((p) => allocations[p.id]?.allocated != null);
 
   return (
     <Modal
       title={`Project Summary: ${agentName}`}
       onClose={onClose}
-      maxWidth={560}
+      maxWidth={showAlloc ? 760 : 560}
       footer={<ModalButton onClick={onClose}>Close</ModalButton>}
     >
       <div className="flex items-center gap-2 mb-3">
@@ -692,6 +830,15 @@ function ProjectSummaryModal({
                 <th className="text-right px-2.5 py-1.5 text-[11px] uppercase text-[#898781]">
                   Days (÷{standardDayHours}h)
                 </th>
+                {showAlloc && (
+                  <>
+                    <th className="text-right px-2.5 py-1.5 text-[11px] uppercase text-[#898781] border-l border-[#e1e0d9]">
+                      Allocated
+                    </th>
+                    <th className="text-right px-2.5 py-1.5 text-[11px] uppercase text-[#898781]">Logged (all)</th>
+                    <th className="text-right px-2.5 py-1.5 text-[11px] uppercase text-[#898781]">Left</th>
+                  </>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -706,6 +853,7 @@ function ProjectSummaryModal({
                   <td className="px-2.5 py-1 text-right tabular-nums">{r.hh}</td>
                   <td className="px-2.5 py-1 text-right tabular-nums">{fmtHours(r.hrs)}</td>
                   <td className="px-2.5 py-1 text-right tabular-nums">{fmtHours(r.days)}</td>
+                  {showAlloc && <AllocCells alloc={allocations[r.project.id]} />}
                 </tr>
               ))}
               <tr className="border-t border-[#e1e0d9] bg-[#f3f2ee]">
@@ -715,12 +863,93 @@ function ProjectSummaryModal({
                 <td className="px-2.5 py-1 text-right tabular-nums font-semibold">
                   {fmtHours((totHH * 0.5) / standardDayHours)}
                 </td>
+                {showAlloc && <td colSpan={3} className="border-l border-[#e1e0d9]" />}
               </tr>
             </tbody>
           </table>
         </div>
       )}
     </Modal>
+  );
+}
+
+function allocState(a: Allocation | undefined) {
+  if (!a || a.allocated == null) return null;
+  const logged = a.loggedHH * 0.5;
+  const left = a.allocated - logged;
+  const pct = a.allocated > 0 ? logged / a.allocated : left < 0 ? 2 : 0;
+  // Amber at 90% used (or <= 10% left), red once over the allocation.
+  const tone = left < 0 ? "over" : pct >= 0.9 ? "low" : "ok";
+  return { allocated: a.allocated, logged, left, pct, tone } as const;
+}
+const TONE_TEXT = { ok: "text-[#1a1a1a]", low: "text-[#b87400]", over: "text-[#d03b3b]" } as const;
+const TONE_BAR = { ok: "#2a78d6", low: "#eda100", over: "#d03b3b" } as const;
+
+function AllocCells({ alloc }: { alloc: Allocation | undefined }) {
+  const st = allocState(alloc);
+  if (!st) {
+    return (
+      <>
+        <td className="px-2.5 py-1 text-right text-[#898781] border-l border-[#e1e0d9]">—</td>
+        <td className="px-2.5 py-1 text-right tabular-nums text-[#898781]">
+          {alloc ? fmtHours(alloc.loggedHH * 0.5) : "—"}
+        </td>
+        <td className="px-2.5 py-1 text-right text-[#898781]">—</td>
+      </>
+    );
+  }
+  return (
+    <>
+      <td className="px-2.5 py-1 text-right tabular-nums border-l border-[#e1e0d9]">{fmtHours(st.allocated)}</td>
+      <td className="px-2.5 py-1 text-right tabular-nums">{fmtHours(st.logged)}</td>
+      <td className={`px-2.5 py-1 text-right tabular-nums font-semibold ${TONE_TEXT[st.tone]}`}>
+        {st.left < 0 ? `${fmtHours(-st.left)} over` : fmtHours(st.left)}
+      </td>
+    </>
+  );
+}
+
+// "Hours left on each campaign": one chip per project that has an
+// allocation, counting this agent's all-time logged hours against it.
+function AllocationStrip({
+  projects,
+  allocations,
+}: {
+  projects: Project[];
+  allocations: Record<string, Allocation>;
+}) {
+  const items = projects
+    .map((p) => ({ project: p, st: allocState(allocations[p.id]) }))
+    .filter((x) => x.st !== null);
+  if (items.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-2 mb-3">
+      {items.map(({ project, st }) => {
+        const s = st!;
+        return (
+          <div key={project.id} className="border border-[#e1e0d9] rounded-lg bg-white px-3 py-1.5 min-w-[190px]">
+            <div className="flex items-center justify-between gap-3 text-[12px]">
+              <span className="inline-flex items-center gap-1.5 font-medium">
+                <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: project.color }} />
+                {project.name}
+              </span>
+              <span className={`tabular-nums font-semibold ${TONE_TEXT[s.tone]}`}>
+                {s.left < 0 ? `${fmtHours(-s.left)}h over` : `${fmtHours(s.left)}h left`}
+              </span>
+            </div>
+            <div className="h-1.5 rounded-full bg-[#ececE6] mt-1 overflow-hidden">
+              <div
+                className="h-full rounded-full"
+                style={{ width: `${Math.min(100, s.pct * 100)}%`, background: TONE_BAR[s.tone] }}
+              />
+            </div>
+            <div className="text-[11px] text-[#898781] tabular-nums mt-0.5">
+              {fmtHours(s.logged)} of {fmtHours(s.allocated)}h logged
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

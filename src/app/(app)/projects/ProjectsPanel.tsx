@@ -7,6 +7,7 @@ import {
   addProject,
   deleteProject,
   setProjectActive,
+  setProjectAllocation,
   setProjectAssignment,
   updateProject,
 } from "@/lib/actions/projects";
@@ -344,6 +345,83 @@ function ProjectEditForm({
           ))}
         </div>
       </div>
+      {assignments.length > 0 && (
+        <div>
+          <h4 className="text-[12.5px] font-semibold mb-0.5">Allocated hours</h4>
+          <p className="text-[11.5px] text-[#898781] mb-1.5">
+            Total hours per agent on this project. Agents see a countdown of what&rsquo;s left; leave blank for
+            no countdown. Safe to change mid-campaign.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {agents
+              .filter((a) => assignedIds.has(a.id))
+              .map((a) => (
+                <AllocationField
+                  key={`${a.id}:${assignments.find((x) => x.agent_id === a.id)?.allocated_hours ?? ""}`}
+                  agent={a}
+                  saved={assignments.find((x) => x.agent_id === a.id)?.allocated_hours ?? null}
+                  disabled={isPending}
+                  onSave={(hours) =>
+                    startTransition(async () => {
+                      await setProjectAllocation(project.id, a.id, hours);
+                      onChanged();
+                    })
+                  }
+                />
+              ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// One agent's allocation. Re-mounted (via key) whenever the saved value
+// changes, so the draft always starts from what's in the database.
+function AllocationField({
+  agent,
+  saved,
+  disabled,
+  onSave,
+}: {
+  agent: Agent;
+  saved: number | null;
+  disabled: boolean;
+  onSave: (hours: number | null) => void;
+}) {
+  const [draft, setDraft] = useState(saved === null ? "" : String(saved));
+  const trimmed = draft.trim();
+  const parsed = trimmed === "" ? null : Number(trimmed);
+  const valid = parsed === null || (Number.isFinite(parsed) && parsed >= 0);
+  const dirty = parsed !== saved && !(parsed === null && saved === null);
+  return (
+    <div className="flex items-center gap-1.5 border border-[#e1e0d9] rounded-md px-2 py-1 bg-white text-[12.5px]">
+      <span className="min-w-[90px]">{agent.name}</span>
+      <input
+        type="number"
+        min={0}
+        step={0.5}
+        inputMode="decimal"
+        placeholder="—"
+        className={`w-[72px] rounded-md border px-1.5 py-0.5 text-[12.5px] tabular-nums ${
+          valid ? "border-[#c3c2b7]" : "border-[#d03b3b]"
+        }`}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && dirty && valid) onSave(parsed);
+        }}
+      />
+      <span className="text-[#898781]">h</span>
+      {dirty && valid && (
+        <button
+          className="rounded-md border border-[#2a78d6] text-[#2a78d6] px-1.5 py-0.5 text-[12px]"
+          disabled={disabled}
+          onClick={() => onSave(parsed)}
+        >
+          Save
+        </button>
+      )}
     </div>
   );
 }

@@ -32,6 +32,17 @@ Total hands-on time: roughly 30–45 minutes.
      you're setting up before that change and want rates for some reason.
    - `supabase/migrations/0005_timesheet_view.sql` — adds the per-agent
      Month/Week timesheet view preference.
+   - `supabase/migrations/0006_agent_timezone.sql` — adds the per-agent
+     timezone (set by an admin on the Team page) and a guard trigger so only
+     admins can change role/active/timezone/name/email. Entries stay on the
+     agent's local wall clock; the timezone is what converts them to UTC in
+     reporting. Run it **before** deploying the matching code.
+   - `supabase/migrations/0007_project_allocations.sql` — adds per-agent,
+     per-project hour allocations (the campaign countdown) and the
+     `agent_project_totals` function behind it. Run **before** deploying.
+   - *(Optional, only if the read-only `reporting` schema exists)*
+     `supabase/reporting_views_utc.sql` — adds `timezone`, `agent_timezone`
+     and `starts_at_utc` to the reporting views.
 
 ## 2. Create a Google OAuth client (for Workspace sign-in)
 

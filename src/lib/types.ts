@@ -1,7 +1,10 @@
 // Shared types mirroring the Supabase schema in supabase/migrations/0001_schema.sql
 
 export type Role = "admin" | "agent";
+// What an agent can persist as their default (Month/Week); the grid also has
+// a transient single-day view that is only ever chosen via the URL.
 export type TimesheetView = "month" | "week";
+export type GridView = TimesheetView | "day";
 
 export interface Agent {
   id: string;
@@ -12,6 +15,9 @@ export interface Agent {
   view_start_slot: number;
   view_end_slot: number;
   timesheet_view: TimesheetView;
+  // IANA name (e.g. "Europe/London"); null = not set yet. Entries are stored
+  // on this agent's local wall clock - see supabase/migrations/0006.
+  timezone: string | null;
   created_at: string;
 }
 
@@ -26,6 +32,8 @@ export interface Project {
 export interface ProjectAgent {
   project_id: string;
   agent_id: string;
+  // Total hours allocated to this agent on this project; null = none set.
+  allocated_hours: number | null;
 }
 
 export interface TimesheetEntry {

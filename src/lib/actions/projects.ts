@@ -68,6 +68,42 @@ export async function setProjectAssignment(projectId: string, agentId: string, a
   revalidatePath("/timesheet");
 }
 
+// Assign / unassign several agents at once (the "select all shown" / "clear
+// shown" buttons in the agent picker). Same effect and audit entries as
+// calling setProjectAssignment for each.
+export async function setProjectAssignments(projectId: string, agentIds: string[], assigned: boolean) {
+  const me = await requireAdmin();
+  const ids = Array.from(new Set(agentIds));
+  if (ids.length === 0) return;
+  if (ids.length > 500) throw new Error("Too many agents at once");
+  const supabase = await createClient();
+
+  if (assigned) {
+    const { error } = await supabase
+      .from("project_agents")
+      .upsert(ids.map((agent_id) => ({ project_id: projectId, agent_id })), { onConflict: "project_id,agent_id" });
+    if (error) throw new Error(error.message);
+  } else {
+    const { error } = await supabase.from("project_agents").delete().eq("project_id", projectId).in("agent_id", ids);
+    if (error) throw new Error(error.message);
+  }
+
+  await supabase.from("audit_log").insert(
+    ids.map((agentId) => ({
+      actor_id: me.id,
+      agent_id: agentId,
+      project_id: projectId,
+      entry_date: null,
+      field: "project_assignment",
+      old_value: null,
+      new_value: assigned ? "assigned" : "unassigned",
+    }))
+  );
+
+  revalidatePath("/projects");
+  revalidatePath("/timesheet");
+}
+
 // Hard delete: permanently removes the project and, via ON DELETE CASCADE,
 // its agent assignments, timesheet entries, and leads. The audit trail is
 // preserved (audit_log.project_id is ON DELETE SET NULL) - the audit entry

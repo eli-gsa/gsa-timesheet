@@ -313,3 +313,82 @@ export async function setRecurringCap(projectId: string, agentId: string, kind: 
   }
   refresh();
 }
+
+export type BulkResult = {
+  created: number;
+  toppedUp: number;
+  failed: { agentId: string; message: string }[];
+};
+
+// Give several agents hours on one project in one go. Agents with an open
+// campaign allocation get a top-up entry (positive or negative); agents
+// without one get a new campaign allocation with this as the opening hours
+// (counting window as given; a negative amount can't open one).
+export async function bulkAllocate(
+  projectId: string,
+  agentIds: string[],
+  hours: number,
+  entryDate: string,
+  startDate: string | null,
+  endDate: string | null,
+  note: string
+): Promise<BulkResult> {
+  const me = await requireAdmin();
+  checkIds(projectId, ...agentIds);
+  const ids = Array.from(new Set(agentIds));
+  if (ids.length === 0) throw new Error("Select at least one agent.");
+  if (ids.length > 200) throw new Error("Too many agents at once.");
+  const h = hoursValue(hours, { allowNegative: true });
+  if (h === 0) throw new Error("Enter a non-zero number of hours.");
+  const date = optDate(entryDate);
+  if (!date) throw new Error("Pick a date");
+  const start = optDate(startDate);
+  const end = optDate(endDate);
+  checkWindow(start, end);
+  const noteText = noteValue(note);
+
+  const supabase = await createClient();
+  const { data: open, error } = await supabase
+    .from("allocations")
+    .select("id, agent_id")
+    .eq("project_id", projectId)
+    .eq("kind", "campaign")
+    .is("closed_at", null)
+    .in("agent_id", ids);
+  if (error) throw new Error(error.message);
+  const openByAgent = new Map((open ?? []).map((a) => [a.agent_id as string, a.id as string]));
+
+  const result: BulkResult = { created: 0, toppedUp: 0, failed: [] };
+  for (const agentId of ids) {
+    try {
+      const existing = openByAgent.get(agentId);
+      if (existing) {
+        const { error: e } = await supabase
+          .from("allocation_entries")
+          .insert({ allocation_id: existing, hours: h, entry_date: date, note: noteText, created_by: me.id });
+        if (e) throw new Error(e.message);
+        await logAudit(supabase, {
+          actorId: me.id,
+          agentId,
+          projectId,
+          field: "allocation_topup",
+          newValue: `${h > 0 ? "+" : ""}${h}h (bulk)`,
+        });
+        result.toppedUp++;
+      } else {
+        if (h < 0) throw new Error("No open allocation to reduce.");
+        await insertAllocation(
+          supabase,
+          me,
+          { projectId, agentId, kind: "campaign", hours: h, startDate: start, endDate: end, note: noteText },
+          date
+        );
+        result.created++;
+      }
+    } catch (e) {
+      result.failed.push({ agentId, message: e instanceof Error ? e.message : "Failed" });
+    }
+  }
+  refresh();
+  return result;
+}

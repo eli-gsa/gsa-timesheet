@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getCurrentAgent } from "@/lib/data";
 import { redirect } from "next/navigation";
 import OverviewClient from "./OverviewClient";
+import { hoursByAgent, hoursByDay, hoursByProject } from "@/lib/aggregates";
 
 function currentYm() {
   const d = new Date();
@@ -30,36 +31,23 @@ export default async function OverviewPage() {
   const trendStart = new Date(today);
   trendStart.setDate(trendStart.getDate() - 29);
 
-  const [{ data: agents }, { data: projects }, { data: monthEntries }, { data: trendEntries }] =
-    await Promise.all([
-      supabase.from("agents").select("id, name, role").order("name"),
-      supabase.from("projects").select("id, name, color, active"),
-      supabase
-        .from("timesheet_entries")
-        .select("agent_id, project_id")
-        .gte("entry_date", monthStart)
-        .lte("entry_date", monthEnd),
-      supabase
-        .from("timesheet_entries")
-        .select("entry_date")
-        .gte("entry_date", dkey(trendStart))
-        .lte("entry_date", dkey(today)),
-    ]);
+  // Totals are counted in the database: reading every entry would hit the
+  // API's 1000-row cap and quietly under-count a busy month.
+  const [{ data: agents }, { data: projects }, byAgentHH, byProjectHH, dailyHH] = await Promise.all([
+    supabase.from("agents").select("id, name, role").order("name"),
+    supabase.from("projects").select("id, name, color, active"),
+    hoursByAgent(supabase, monthStart, monthEnd),
+    hoursByProject(supabase, monthStart, monthEnd),
+    hoursByDay(supabase, dkey(trendStart), dkey(today)),
+  ]);
 
   const agentList = agents ?? [];
   const projectList = projects ?? [];
   const projectById = new Map(projectList.map((p) => [p.id, p]));
   const agentById = new Map(agentList.map((a) => [a.id, a]));
 
-  const byProjectHH = new Map<string, number>();
-  const byAgentHH = new Map<string, number>();
-  const agentsLogged = new Set<string>();
-  for (const e of monthEntries ?? []) {
-    byProjectHH.set(e.project_id, (byProjectHH.get(e.project_id) ?? 0) + 1);
-    byAgentHH.set(e.agent_id, (byAgentHH.get(e.agent_id) ?? 0) + 1);
-    agentsLogged.add(e.agent_id);
-  }
-  const totalHours = ((monthEntries ?? []).length) * 0.5;
+  const agentsLogged = new Set(byAgentHH.keys());
+  const totalHours = Array.from(byAgentHH.values()).reduce((s, n) => s + n, 0) * 0.5;
   const elapsedDays = today.getDate();
   const avgHoursPerDay = elapsedDays ? totalHours / elapsedDays : 0;
   const activeProjects = projectList.filter((p) => p.active);
@@ -97,9 +85,7 @@ export default async function OverviewPage() {
 
   // Daily trend: last 30 days, total hours per day
   const dailyMap = new Map<string, number>();
-  for (const e of trendEntries ?? []) {
-    dailyMap.set(e.entry_date, (dailyMap.get(e.entry_date) ?? 0) + 0.5);
-  }
+  for (const [date, hh] of dailyHH) dailyMap.set(date, hh * 0.5);
   const trendLabels: string[] = [];
   const trendValues: number[] = [];
   for (let i = 29; i >= 0; i--) {

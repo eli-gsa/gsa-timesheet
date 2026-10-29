@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentAgent } from "@/lib/data";
 import { logAudit } from "@/lib/audit";
+import { fetchAll } from "@/lib/aggregates";
 
 export type CellRef = { date: string; slot: number };
 
@@ -102,21 +103,27 @@ export async function getAgentRangeTotals(
 
   const supabase = await createClient();
 
-  const [{ data: entries }, { data: setting }] = await Promise.all([
-    supabase
-      .from("timesheet_entries")
-      .select("project_id")
-      .eq("agent_id", agentId)
-      .gte("entry_date", startDate)
-      .lte("entry_date", endDate),
+  const [rows, { data: setting }] = await Promise.all([
+    // Paged: one agent's month can exceed the API's 1000-row cap.
+    fetchAll<{ project_id: string }>(
+      (from, to) =>
+        supabase
+          .from("timesheet_entries")
+          .select("project_id")
+          .eq("agent_id", agentId)
+          .gte("entry_date", startDate)
+          .lte("entry_date", endDate)
+          .order("entry_date")
+          .order("slot")
+          .range(from, to) as unknown as PromiseLike<{ data: { project_id: string }[] | null; error: { message: string } | null }>
+    ),
     supabase.from("settings").select("value").eq("key", "standard_work_day").maybeSingle(),
   ]);
 
   const totals: Record<string, number> = {};
-  for (const e of entries ?? []) {
+  for (const e of rows) {
     totals[e.project_id] = (totals[e.project_id] ?? 0) + 1; // half-hours
   }
-
   const win = (setting?.value as { startSlot: number; endSlot: number } | undefined) ?? {
     startSlot: 16,
     endSlot: 34,

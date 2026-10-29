@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/data";
 import type { Agent, Project, ProjectAgent } from "@/lib/types";
+import { hoursByAgent as aggHoursByAgent, agentIdsWithHours as agentIdsWithHoursFn } from "@/lib/aggregates";
 import TeamTable from "./TeamTable";
 
 function currentYm() {
@@ -16,24 +17,17 @@ export default async function TeamPage() {
   const monthStart = `${month}-01`;
   const monthEnd = `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`;
 
-  const [{ data: agents }, { data: projects }, { data: assignments }, { data: monthEntries }, { data: allEntries }] =
+  const [{ data: agents }, { data: projects }, { data: assignments }, monthHH, agentIdsWithHours] =
     await Promise.all([
       supabase.from("agents").select("*").order("name"),
       supabase.from("projects").select("*").order("name"),
       supabase.from("project_agents").select("*"),
-      supabase
-        .from("timesheet_entries")
-        .select("agent_id")
-        .gte("entry_date", monthStart)
-        .lte("entry_date", monthEnd),
-      supabase.from("timesheet_entries").select("agent_id"),
+      aggHoursByAgent(supabase, monthStart, monthEnd),
+      agentIdsWithHoursFn(supabase),
     ]);
 
   const hoursByAgent: Record<string, number> = {};
-  for (const e of monthEntries ?? []) {
-    hoursByAgent[e.agent_id] = (hoursByAgent[e.agent_id] ?? 0) + 0.5;
-  }
-  const agentIdsWithHours = Array.from(new Set((allEntries ?? []).map((e) => e.agent_id)));
+  for (const [id, hh] of monthHH) hoursByAgent[id] = hh * 0.5;
 
   return (
     <TeamTable

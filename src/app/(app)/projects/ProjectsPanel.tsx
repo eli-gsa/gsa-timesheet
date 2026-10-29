@@ -2,20 +2,22 @@
 
 import { Fragment, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { Agent, Project, ProjectAgent, TimesheetEntry } from "@/lib/types";
+import type { Agent, Project, ProjectAgent } from "@/lib/types";
 import {
   addProject,
   deleteProject,
   setProjectActive,
   setProjectAssignment,
+  setProjectAssignments,
   updateProject,
 } from "@/lib/actions/projects";
 import Modal, { ListRow, ModalButton, RoleBadge } from "@/components/Modal";
 import { useRowHighlight } from "@/components/useRowHighlight";
 import { useBusyTransition } from "@/components/BusyOverlay";
 import AllocationsModal from "./AllocationsModal";
-import { figures, type AllocStatus } from "@/lib/allocation";
-import { fmtHours } from "@/lib/types";
+import AgentPicker from "./AgentPicker";
+import AllocationTable from "./AllocationTable";
+import type { AllocStatus } from "@/lib/allocation";
 
 const DEFAULT_PALETTE = ["#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948", "#2a78d6"];
 
@@ -23,13 +25,13 @@ export default function ProjectsPanel({
   projects,
   agents,
   assignments,
-  entries,
+  projectIdsWithHours,
   allocStatus,
 }: {
   projects: Project[];
   agents: Agent[];
   assignments: ProjectAgent[];
-  entries: Pick<TimesheetEntry, "project_id">[];
+  projectIdsWithHours: string[];
   allocStatus: AllocStatus[];
 }) {
   const router = useRouter();
@@ -45,9 +47,9 @@ export default function ProjectsPanel({
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
 
   const projectHasHours = useMemo(() => {
-    const set = new Set(entries.map((e) => e.project_id));
+    const set = new Set(projectIdsWithHours);
     return (projectId: string) => set.has(projectId);
-  }, [entries]);
+  }, [projectIdsWithHours]);
 
   const list = projects.filter(
     (p) => p.name.toLowerCase().includes(search.toLowerCase()) && p.active === (statusFilter === "active")
@@ -331,72 +333,38 @@ function ProjectEditForm({
       </div>
       <div>
         <h4 className="text-[12.5px] font-semibold mb-1.5">Assigned agents</h4>
-        <div className="flex flex-wrap gap-1.5">
-          {agents.map((a) => (
-            <label
-              key={a.id}
-              className="flex items-center gap-1.5 border border-[#e1e0d9] rounded-full px-2.5 py-1 text-[12.5px] bg-white"
-            >
-              <input
-                type="checkbox"
-                checked={assignedIds.has(a.id)}
-                disabled={isPending}
-                onChange={(e) =>
-                  startTransition(async () => {
-                    await setProjectAssignment(project.id, a.id, e.target.checked);
-                    onChanged();
-                  })
-                }
-              />
-              {a.name}
-            </label>
-          ))}
-        </div>
+        <AgentPicker
+          agents={agents}
+          assignedIds={assignedIds}
+          disabled={isPending}
+          onToggle={(agentId, assigned) =>
+            startTransition(async () => {
+              await setProjectAssignment(project.id, agentId, assigned);
+              onChanged();
+            })
+          }
+          onSetMany={(agentIds, assigned) =>
+            startTransition(async () => {
+              await setProjectAssignments(project.id, agentIds, assigned);
+              onChanged();
+            })
+          }
+        />
       </div>
       {assignments.length > 0 && (
         <div>
           <h4 className="text-[12.5px] font-semibold mb-0.5">Hours allocated</h4>
           <p className="text-[11.5px] text-[#898781] mb-1.5">
-            Per agent: a campaign total you can top up, count from a start date, and close or renew, plus optional
-            weekly/monthly caps. Agents see the hours left on their timesheet.
+            Tick agents to give several the same hours at once, or use Manage… for one agent: top-ups, counting
+            window, close/renew and weekly/monthly caps. Agents see the hours left on their timesheet.
           </p>
-          <div className="border border-[#e1e0d9] rounded-lg bg-white overflow-hidden">
-            {agents
-              .filter((a) => assignedIds.has(a.id))
-              .map((a) => {
-                const mine = allocStatus.filter((x) => x.agentId === a.id);
-                const campaign = mine.find((x) => x.kind === "campaign");
-                const caps = mine.filter((x) => x.kind !== "campaign");
-                const f = campaign ? figures(campaign) : null;
-                return (
-                  <div key={a.id} className="flex items-center gap-3 px-2.5 py-1.5 text-[12.5px] border-b border-[#e1e0d9] last:border-b-0">
-                    <span className="min-w-[120px] font-medium">{a.name}</span>
-                    <span className="flex-1 text-[#52514e] tabular-nums">
-                      {f ? (
-                        <span className={f.tone === "over" ? "text-[#d03b3b]" : f.tone === "low" ? "text-[#b87400]" : ""}>
-                          {f.left < 0 ? `${fmtHours(-f.left)}h over` : `${fmtHours(f.left)}h left`}
-                          <span className="text-[#898781]"> of {fmtHours(f.total)}h</span>
-                        </span>
-                      ) : (
-                        <span className="text-[#898781]">no campaign allocation</span>
-                      )}
-                      {caps.map((c) => (
-                        <span key={c.allocationId} className="text-[#898781]">
-                          {" "}
-                          · {fmtHours(c.totalHours)}h/{c.kind === "weekly" ? "wk" : "mo"}
-                        </span>
-                      ))}
-                    </span>
-                    <button
-                      className="rounded-md border border-[#c3c2b7] bg-white px-2 py-1 text-[12px] hover:bg-[#f3f2ee]"
-                      onClick={() => setAllocFor(a)}
-                    >
-                      Manage…
-                    </button>
-                  </div>
-                );
-              })}
-          </div>
+          <AllocationTable
+            projectId={project.id}
+            agents={agents.filter((a) => assignedIds.has(a.id))}
+            allocStatus={allocStatus}
+            onManage={setAllocFor}
+            onChanged={onChanged}
+          />
         </div>
       )}
       {allocFor && (

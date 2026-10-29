@@ -49,6 +49,9 @@ Total hands-on time: roughly 30–45 minutes.
      allocations with a top-up ledger, counting windows, close/renew and
      weekly/monthly caps. Copies any existing single-number allocation across
      (nothing is lost) and replaces it in the app. Run **before** deploying.
+   - `supabase/migrations/0010_hours_aggregates.sql` — database-side hour
+     totals so the Overview, Agents, Projects and Reports pages stay correct
+     past the API's 1,000-row limit. Functions only; run **before** deploying.
    - *(Optional, only if the read-only `reporting` schema exists)*
      `supabase/reporting_views_utc.sql` — adds `timezone`, `agent_timezone`
      and `starts_at_utc` to the reporting views.

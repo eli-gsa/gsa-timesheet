@@ -3,6 +3,7 @@ import { requireAgent } from "@/lib/data";
 import TimesheetGrid from "./TimesheetGrid";
 import { todayIn } from "@/lib/timezones";
 import { mapStatusRows } from "@/lib/allocation";
+import { fetchAll } from "@/lib/aggregates";
 import type { Agent, GridView, Lead, LeadType, Project, TimesheetEntry } from "@/lib/types";
 
 function pad2(n: number): string {
@@ -93,13 +94,21 @@ export default async function TimesheetPage({
   // to the month containing the visible week's first day.
   const leadsPeriod = view === "day" ? day.slice(0, 7) : view === "week" ? weekStart.slice(0, 7) : month;
 
-  const [{ data: entries }, { data: leads }, { data: leadTypes }, { data: statusRows }] = await Promise.all([
-    supabase
-      .from("timesheet_entries")
-      .select("*")
-      .eq("agent_id", viewingId)
-      .gte("entry_date", rangeStart)
-      .lte("entry_date", rangeEnd),
+  const [entries, { data: leads }, { data: leadTypes }, { data: statusRows }] = await Promise.all([
+    // Paged: a month on a 24-hour schedule is up to 1488 slots, over the
+    // API's 1000-row cap.
+    fetchAll<TimesheetEntry>(
+      (from, to) =>
+        supabase
+          .from("timesheet_entries")
+          .select("*")
+          .eq("agent_id", viewingId)
+          .gte("entry_date", rangeStart)
+          .lte("entry_date", rangeEnd)
+          .order("entry_date")
+          .order("slot")
+          .range(from, to) as unknown as PromiseLike<{ data: TimesheetEntry[] | null; error: { message: string } | null }>
+    ),
     supabase.from("leads").select("*").eq("agent_id", viewingId).eq("period", leadsPeriod),
     supabase.from("lead_types").select("*").order("name"),
     // Open allocations (hours-remaining) with their figures. If the function
@@ -122,7 +131,7 @@ export default async function TimesheetPage({
       allocStatus={allocStatus}
       today={today}
       projects={myProjects}
-      entries={(entries as TimesheetEntry[]) ?? []}
+      entries={entries}
       leads={(leads as Lead[]) ?? []}
       leadTypes={(leadTypes as LeadType[]) ?? []}
     />

@@ -9,11 +9,15 @@ const ADMIN_LINKS = [
   { href: "/team", label: "Agents" },
   { href: "/projects", label: "Projects" },
   { href: "/reports", label: "Reports" },
+  { href: "/invoicing", label: "Invoicing" },
   { href: "/audit", label: "Audit log" },
   { href: "/settings", label: "Settings" },
 ];
 
-const AGENT_LINKS = [{ href: "/timesheet", label: "My Timesheet" }];
+const AGENT_LINKS = [
+  { href: "/timesheet", label: "My Timesheet" },
+  { href: "/summary", label: "My Summary" },
+];
 
 export default function NavLinks({ role }: { role: Role }) {
   const pathname = usePathname();

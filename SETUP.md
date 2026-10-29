@@ -40,6 +40,11 @@ Total hands-on time: roughly 30–45 minutes.
    - `supabase/migrations/0007_project_allocations.sql` — adds per-agent,
      per-project hour allocations (the campaign countdown) and the
      `agent_project_totals` function behind it. Run **before** deploying.
+   - `supabase/migrations/0008_invoicing.sql` — adds the Invoicing feature's
+     tables (private per-admin hourly rates, a record of exported invoices)
+     and aggregate functions (also used by the agents' My Summary page). Run
+     **before** deploying. Rates are admin-private and are deliberately not
+     exposed in the `reporting` schema.
    - *(Optional, only if the read-only `reporting` schema exists)*
      `supabase/reporting_views_utc.sql` — adds `timezone`, `agent_timezone`
      and `starts_at_utc` to the reporting views.

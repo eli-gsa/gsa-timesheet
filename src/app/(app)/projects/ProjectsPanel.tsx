@@ -7,13 +7,15 @@ import {
   addProject,
   deleteProject,
   setProjectActive,
-  setProjectAllocation,
   setProjectAssignment,
   updateProject,
 } from "@/lib/actions/projects";
 import Modal, { ListRow, ModalButton, RoleBadge } from "@/components/Modal";
 import { useRowHighlight } from "@/components/useRowHighlight";
 import { useBusyTransition } from "@/components/BusyOverlay";
+import AllocationsModal from "./AllocationsModal";
+import { figures, type AllocStatus } from "@/lib/allocation";
+import { fmtHours } from "@/lib/types";
 
 const DEFAULT_PALETTE = ["#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948", "#2a78d6"];
 
@@ -22,11 +24,13 @@ export default function ProjectsPanel({
   agents,
   assignments,
   entries,
+  allocStatus,
 }: {
   projects: Project[];
   agents: Agent[];
   assignments: ProjectAgent[];
   entries: Pick<TimesheetEntry, "project_id">[];
+  allocStatus: AllocStatus[];
 }) {
   const router = useRouter();
   useRowHighlight("data-proj-row");
@@ -216,6 +220,7 @@ export default function ProjectsPanel({
                           project={p}
                           agents={agents}
                           assignments={assignments.filter((a) => a.project_id === p.id)}
+                          allocStatus={allocStatus.filter((a) => a.projectId === p.id)}
                           onChanged={refresh}
                         />
                       </td>
@@ -274,14 +279,17 @@ function ProjectEditForm({
   project,
   agents,
   assignments,
+  allocStatus,
   onChanged,
 }: {
   project: Project;
   agents: Agent[];
   assignments: ProjectAgent[];
+  allocStatus: AllocStatus[];
   onChanged: () => void;
 }) {
   const [isPending, startTransition] = useBusyTransition();
+  const [allocFor, setAllocFor] = useState<Agent | null>(null);
   const [name, setName] = useState(project.name);
   const [color, setColor] = useState(project.color);
   const assignedIds = new Set(assignments.map((a) => a.agent_id));
@@ -347,80 +355,59 @@ function ProjectEditForm({
       </div>
       {assignments.length > 0 && (
         <div>
-          <h4 className="text-[12.5px] font-semibold mb-0.5">Allocated hours</h4>
+          <h4 className="text-[12.5px] font-semibold mb-0.5">Hours allocated</h4>
           <p className="text-[11.5px] text-[#898781] mb-1.5">
-            Total hours per agent on this project. Agents see a countdown of what&rsquo;s left; leave blank for
-            no countdown. Safe to change mid-campaign.
+            Per agent: a campaign total you can top up, count from a start date, and close or renew, plus optional
+            weekly/monthly caps. Agents see the hours left on their timesheet.
           </p>
-          <div className="flex flex-wrap gap-2">
+          <div className="border border-[#e1e0d9] rounded-lg bg-white overflow-hidden">
             {agents
               .filter((a) => assignedIds.has(a.id))
-              .map((a) => (
-                <AllocationField
-                  key={`${a.id}:${assignments.find((x) => x.agent_id === a.id)?.allocated_hours ?? ""}`}
-                  agent={a}
-                  saved={assignments.find((x) => x.agent_id === a.id)?.allocated_hours ?? null}
-                  disabled={isPending}
-                  onSave={(hours) =>
-                    startTransition(async () => {
-                      await setProjectAllocation(project.id, a.id, hours);
-                      onChanged();
-                    })
-                  }
-                />
-              ))}
+              .map((a) => {
+                const mine = allocStatus.filter((x) => x.agentId === a.id);
+                const campaign = mine.find((x) => x.kind === "campaign");
+                const caps = mine.filter((x) => x.kind !== "campaign");
+                const f = campaign ? figures(campaign) : null;
+                return (
+                  <div key={a.id} className="flex items-center gap-3 px-2.5 py-1.5 text-[12.5px] border-b border-[#e1e0d9] last:border-b-0">
+                    <span className="min-w-[120px] font-medium">{a.name}</span>
+                    <span className="flex-1 text-[#52514e] tabular-nums">
+                      {f ? (
+                        <span className={f.tone === "over" ? "text-[#d03b3b]" : f.tone === "low" ? "text-[#b87400]" : ""}>
+                          {f.left < 0 ? `${fmtHours(-f.left)}h over` : `${fmtHours(f.left)}h left`}
+                          <span className="text-[#898781]"> of {fmtHours(f.total)}h</span>
+                        </span>
+                      ) : (
+                        <span className="text-[#898781]">no campaign allocation</span>
+                      )}
+                      {caps.map((c) => (
+                        <span key={c.allocationId} className="text-[#898781]">
+                          {" "}
+                          · {fmtHours(c.totalHours)}h/{c.kind === "weekly" ? "wk" : "mo"}
+                        </span>
+                      ))}
+                    </span>
+                    <button
+                      className="rounded-md border border-[#c3c2b7] bg-white px-2 py-1 text-[12px] hover:bg-[#f3f2ee]"
+                      onClick={() => setAllocFor(a)}
+                    >
+                      Manage…
+                    </button>
+                  </div>
+                );
+              })}
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-// One agent's allocation. Re-mounted (via key) whenever the saved value
-// changes, so the draft always starts from what's in the database.
-function AllocationField({
-  agent,
-  saved,
-  disabled,
-  onSave,
-}: {
-  agent: Agent;
-  saved: number | null;
-  disabled: boolean;
-  onSave: (hours: number | null) => void;
-}) {
-  const [draft, setDraft] = useState(saved === null ? "" : String(saved));
-  const trimmed = draft.trim();
-  const parsed = trimmed === "" ? null : Number(trimmed);
-  const valid = parsed === null || (Number.isFinite(parsed) && parsed >= 0);
-  const dirty = parsed !== saved && !(parsed === null && saved === null);
-  return (
-    <div className="flex items-center gap-1.5 border border-[#e1e0d9] rounded-md px-2 py-1 bg-white text-[12.5px]">
-      <span className="min-w-[90px]">{agent.name}</span>
-      <input
-        type="number"
-        min={0}
-        step={0.5}
-        inputMode="decimal"
-        placeholder="—"
-        className={`w-[72px] rounded-md border px-1.5 py-0.5 text-[12.5px] tabular-nums ${
-          valid ? "border-[#c3c2b7]" : "border-[#d03b3b]"
-        }`}
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && dirty && valid) onSave(parsed);
-        }}
-      />
-      <span className="text-[#898781]">h</span>
-      {dirty && valid && (
-        <button
-          className="rounded-md border border-[#2a78d6] text-[#2a78d6] px-1.5 py-0.5 text-[12px]"
-          disabled={disabled}
-          onClick={() => onSave(parsed)}
-        >
-          Save
-        </button>
+      {allocFor && (
+        <AllocationsModal
+          projectId={project.id}
+          projectName={project.name}
+          agentId={allocFor.id}
+          agentName={allocFor.name}
+          onClose={() => setAllocFor(null)}
+          onChanged={onChanged}
+        />
       )}
     </div>
   );

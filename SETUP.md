@@ -45,6 +45,10 @@ Total hands-on time: roughly 30–45 minutes.
      and aggregate functions (also used by the agents' My Summary page). Run
      **before** deploying. Rates are admin-private and are deliberately not
      exposed in the `reporting` schema.
+   - `supabase/migrations/0009_allocations.sql` — flexible hours-remaining:
+     allocations with a top-up ledger, counting windows, close/renew and
+     weekly/monthly caps. Copies any existing single-number allocation across
+     (nothing is lost) and replaces it in the app. Run **before** deploying.
    - *(Optional, only if the read-only `reporting` schema exists)*
      `supabase/reporting_views_utc.sql` — adds `timezone`, `agent_timezone`
      and `starts_at_utc` to the reporting views.

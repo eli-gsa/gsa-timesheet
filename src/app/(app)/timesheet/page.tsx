@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { requireAgent } from "@/lib/data";
 import TimesheetGrid from "./TimesheetGrid";
 import { todayIn } from "@/lib/timezones";
+import { mapStatusRows } from "@/lib/allocation";
 import type { Agent, GridView, Lead, LeadType, Project, TimesheetEntry } from "@/lib/types";
 
 function pad2(n: number): string {
@@ -39,13 +40,7 @@ export default async function TimesheetPage({
   let viewingId = me.id;
   if (me.role === "admin" && params.agent) viewingId = params.agent;
 
-  const [
-    { data: viewingAgent },
-    { data: allAgents },
-    { data: allProjects },
-    { data: assignments },
-    { data: projectTotals },
-  ] =
+  const [{ data: viewingAgent }, { data: allAgents }, { data: allProjects }, { data: assignments }] =
     await Promise.all([
       supabase.from("agents").select("*").eq("id", viewingId).maybeSingle(),
       me.role === "admin"
@@ -53,8 +48,6 @@ export default async function TimesheetPage({
         : Promise.resolve({ data: null }),
       supabase.from("projects").select("*").eq("active", true).order("name"),
       supabase.from("project_agents").select("project_id, agent_id, allocated_hours").eq("agent_id", viewingId),
-      // All-time half-hours per project, for the allocation countdown.
-      supabase.rpc("agent_project_totals", { p_agent: viewingId }),
     ]);
 
   const viewing: Agent = (viewingAgent as Agent) ?? me;
@@ -89,22 +82,6 @@ export default async function TimesheetPage({
 
   const day = params.day && /^\d{4}-\d{2}-\d{2}$/.test(params.day) ? params.day : today;
 
-  // Allocation countdown: hours allocated per project (admin-set) next to
-  // all-time hours logged on it by this agent.
-  const loggedHH = new Map<string, number>(
-    ((projectTotals as { project_id: string; half_hours: number }[] | null) ?? []).map((r) => [
-      r.project_id,
-      Number(r.half_hours),
-    ])
-  );
-  const allocations: Record<string, { allocated: number | null; loggedHH: number }> = {};
-  for (const a of assignments ?? []) {
-    allocations[a.project_id] = {
-      allocated: a.allocated_hours === null || a.allocated_hours === undefined ? null : Number(a.allocated_hours),
-      loggedHH: loggedHH.get(a.project_id) ?? 0,
-    };
-  }
-
   // The visible grid range: the whole calendar month, or just the 7 days of
   // the active week (which may straddle two months) - only this range's
   // entries need to be fetched, not the whole month regardless of view.
@@ -116,7 +93,7 @@ export default async function TimesheetPage({
   // to the month containing the visible week's first day.
   const leadsPeriod = view === "day" ? day.slice(0, 7) : view === "week" ? weekStart.slice(0, 7) : month;
 
-  const [{ data: entries }, { data: leads }, { data: leadTypes }] = await Promise.all([
+  const [{ data: entries }, { data: leads }, { data: leadTypes }, { data: statusRows }] = await Promise.all([
     supabase
       .from("timesheet_entries")
       .select("*")
@@ -125,7 +102,12 @@ export default async function TimesheetPage({
       .lte("entry_date", rangeEnd),
     supabase.from("leads").select("*").eq("agent_id", viewingId).eq("period", leadsPeriod),
     supabase.from("lead_types").select("*").order("name"),
+    // Open allocations (hours-remaining) with their figures. If the function
+    // doesn't exist yet (migration 0009 not run) this just errors to null and
+    // the page works without the countdown.
+    supabase.rpc("allocation_status", { p_agent: viewingId, p_today: today, p_include_closed: false }),
   ]);
+  const allocStatus = mapStatusRows(statusRows).filter((a) => assignedProjectIds.has(a.projectId));
 
   return (
     <TimesheetGrid
@@ -137,7 +119,8 @@ export default async function TimesheetPage({
       month={month}
       weekStart={weekStart}
       day={day}
-      allocations={allocations}
+      allocStatus={allocStatus}
+      today={today}
       projects={myProjects}
       entries={(entries as TimesheetEntry[]) ?? []}
       leads={(leads as Lead[]) ?? []}

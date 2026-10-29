@@ -10,6 +10,7 @@ import { updateAgentViewWindow, updateTimesheetView } from "@/lib/actions/agents
 import Modal, { ModalButton } from "@/components/Modal";
 import { useBusyTransition } from "@/components/BusyOverlay";
 import { todayIn } from "@/lib/timezones";
+import { paceInfo, figures, windowLabel, type AllocStatus } from "@/lib/allocation";
 
 function daysInMonth(y: number, m: number) {
   return new Date(y, m, 0).getDate();
@@ -79,7 +80,8 @@ export default function TimesheetGrid({
   month,
   weekStart,
   day,
-  allocations,
+  allocStatus,
+  today,
   projects,
   entries,
   leads,
@@ -92,7 +94,8 @@ export default function TimesheetGrid({
   month: string;
   weekStart: string;
   day: string;
-  allocations: Record<string, Allocation>;
+  allocStatus: AllocStatus[];
+  today: string;
   projects: Project[];
   entries: TimesheetEntry[];
   leads: Lead[];
@@ -160,6 +163,17 @@ export default function TimesheetGrid({
   }, [projects]);
 
   const totalHours = entries.length * 0.5;
+
+  // The open campaign allocation per project (size + hours logged inside its
+  // counting window): feeds the Allocated / Logged / Left columns of Project
+  // Summary. Weekly/monthly caps show in the header strip only.
+  const allocations = useMemo(() => {
+    const m: Record<string, Allocation> = {};
+    for (const a of allocStatus) {
+      if (a.kind === "campaign") m[a.projectId] = { allocated: a.totalHours, loggedHH: a.loggedHH ?? 0 };
+    }
+    return m;
+  }, [allocStatus]);
 
   // Day view's side table: half-hours per project for the one visible day
   // (entries only ever holds that day when view === "day").
@@ -454,7 +468,7 @@ export default function TimesheetGrid({
         </div>
       </div>
 
-      <AllocationStrip projects={projects} allocations={allocations} />
+      <AllocationStrip projects={projects} items={allocStatus} today={today} />
 
       {view === "day" ? (
         <div className="flex items-start gap-4 flex-wrap">
@@ -835,7 +849,7 @@ function ProjectSummaryModal({
                     <th className="text-right px-2.5 py-1.5 text-[11px] uppercase text-[#898781] border-l border-[#e1e0d9]">
                       Allocated
                     </th>
-                    <th className="text-right px-2.5 py-1.5 text-[11px] uppercase text-[#898781]">Logged (all)</th>
+                    <th className="text-right px-2.5 py-1.5 text-[11px] uppercase text-[#898781]">Logged</th>
                     <th className="text-right px-2.5 py-1.5 text-[11px] uppercase text-[#898781]">Left</th>
                   </>
                 )}
@@ -909,43 +923,83 @@ function AllocCells({ alloc }: { alloc: Allocation | undefined }) {
   );
 }
 
-// "Hours left on each campaign": one chip per project that has an
-// allocation, counting this agent's all-time logged hours against it.
+const KIND_ORDER = { campaign: 0, weekly: 1, monthly: 2 } as const;
+const KIND_LABEL = { campaign: "", weekly: " · weekly cap", monthly: " · monthly cap" } as const;
+const KIND_SCOPE = { campaign: "", weekly: "this week", monthly: "this month" } as const;
+
+// "Hours left" for each open allocation of the agent's projects: a campaign
+// total counted over its window, or a weekly/monthly cap that resets by itself.
+// With an end date, also the pace needed to use the hours up in time.
 function AllocationStrip({
   projects,
-  allocations,
+  items,
+  today,
 }: {
   projects: Project[];
-  allocations: Record<string, Allocation>;
+  items: AllocStatus[];
+  today: string;
 }) {
-  const items = projects
-    .map((p) => ({ project: p, st: allocState(allocations[p.id]) }))
-    .filter((x) => x.st !== null);
-  if (items.length === 0) return null;
+  const byId = new Map(projects.map((p) => [p.id, p]));
+  const list = items
+    .filter((a) => byId.has(a.projectId))
+    .sort(
+      (a, b) =>
+        (byId.get(a.projectId)!.name).localeCompare(byId.get(b.projectId)!.name) ||
+        KIND_ORDER[a.kind] - KIND_ORDER[b.kind]
+    );
+  if (list.length === 0) return null;
   return (
     <div className="flex flex-wrap gap-2 mb-3">
-      {items.map(({ project, st }) => {
-        const s = st!;
+      {list.map((a) => {
+        const project = byId.get(a.projectId)!;
+        const f = figures(a);
+        const pace = paceInfo(a, today);
         return (
-          <div key={project.id} className="border border-[#e1e0d9] rounded-lg bg-white px-3 py-1.5 min-w-[190px]">
+          <div key={a.allocationId} className="border border-[#e1e0d9] rounded-lg bg-white px-3 py-1.5 min-w-[200px] max-w-[280px]">
             <div className="flex items-center justify-between gap-3 text-[12px]">
               <span className="inline-flex items-center gap-1.5 font-medium">
                 <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: project.color }} />
                 {project.name}
+                <span className="font-normal text-[#898781]">{KIND_LABEL[a.kind]}</span>
               </span>
-              <span className={`tabular-nums font-semibold ${TONE_TEXT[s.tone]}`}>
-                {s.left < 0 ? `${fmtHours(-s.left)}h over` : `${fmtHours(s.left)}h left`}
+              <span className={`tabular-nums font-semibold whitespace-nowrap ${TONE_TEXT[f.tone]}`}>
+                {f.left < 0 ? `${fmtHours(-f.left)}h over` : `${fmtHours(f.left)}h left`}
               </span>
             </div>
             <div className="h-1.5 rounded-full bg-[#ececE6] mt-1 overflow-hidden">
               <div
                 className="h-full rounded-full"
-                style={{ width: `${Math.min(100, s.pct * 100)}%`, background: TONE_BAR[s.tone] }}
+                style={{ width: `${Math.min(100, f.pct * 100)}%`, background: TONE_BAR[f.tone] }}
               />
             </div>
             <div className="text-[11px] text-[#898781] tabular-nums mt-0.5">
-              {fmtHours(s.logged)} of {fmtHours(s.allocated)}h logged
+              {fmtHours(f.logged)} of {fmtHours(f.total)}h logged ·{" "}
+              {a.kind === "campaign" ? windowLabel(a) : KIND_SCOPE[a.kind]}
             </div>
+            {pace && (
+              <div className="text-[11px] mt-0.5 tabular-nums">
+                {pace.ended ? (
+                  <span className="text-[#b87400]">Ended with {fmtHours(pace.remainingH)}h unused</span>
+                ) : pace.notStarted ? (
+                  <span className="text-[#898781]">Starts {windowLabel({ startDate: a.startDate, endDate: null }).replace("from ", "")}</span>
+                ) : (
+                  <>
+                    <span className="text-[#52514e]">
+                      Needs {fmtHours(Math.round((pace.requiredPerDay ?? 0) * 10) / 10)}h/day · {pace.daysLeft} working day
+                      {pace.daysLeft === 1 ? "" : "s"} left
+                    </span>
+                    {pace.onTrack !== null && (
+                      <span className={`ml-1.5 font-semibold ${pace.onTrack ? "text-[#1baf7a]" : "text-[#b87400]"}`}>
+                        {pace.onTrack ? "On track" : "Behind"}
+                        {pace.avgPerDay !== null && (
+                          <span className="font-normal text-[#898781]"> (avg {fmtHours(Math.round(pace.avgPerDay * 10) / 10)}h/day)</span>
+                        )}
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </div>
         );
       })}

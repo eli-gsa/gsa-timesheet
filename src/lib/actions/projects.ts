@@ -68,45 +68,6 @@ export async function setProjectAssignment(projectId: string, agentId: string, a
   revalidatePath("/timesheet");
 }
 
-// Admin-only: the total hours an agent is allocated on a project (drives the
-// countdown on their timesheet). null clears it. Editable at any time, e.g.
-// when a campaign's allocation changes mid-flight; every change is audited.
-export async function setProjectAllocation(projectId: string, agentId: string, hours: number | null) {
-  const me = await requireAdmin();
-  if (hours !== null && (!Number.isFinite(hours) || hours < 0 || hours > 100000)) {
-    throw new Error("Allocation must be a number of hours, 0 or more.");
-  }
-  const rounded = hours === null ? null : Math.round(hours * 100) / 100;
-  const supabase = await createClient();
-
-  const { data: existing } = await supabase
-    .from("project_agents")
-    .select("allocated_hours")
-    .eq("project_id", projectId)
-    .eq("agent_id", agentId)
-    .maybeSingle();
-  if (!existing) throw new Error("Assign the agent to this project first.");
-
-  const { error } = await supabase
-    .from("project_agents")
-    .update({ allocated_hours: rounded })
-    .eq("project_id", projectId)
-    .eq("agent_id", agentId);
-  if (error) throw new Error(error.message);
-
-  await logAudit(supabase, {
-    actorId: me.id,
-    agentId,
-    projectId,
-    field: "project_allocation",
-    oldValue: existing.allocated_hours === null ? "(none)" : `${existing.allocated_hours}h`,
-    newValue: rounded === null ? "(none)" : `${rounded}h`,
-  });
-
-  revalidatePath("/projects");
-  revalidatePath("/timesheet");
-}
-
 // Hard delete: permanently removes the project and, via ON DELETE CASCADE,
 // its agent assignments, timesheet entries, and leads. The audit trail is
 // preserved (audit_log.project_id is ON DELETE SET NULL) - the audit entry

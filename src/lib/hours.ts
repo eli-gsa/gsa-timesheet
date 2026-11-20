@@ -19,6 +19,14 @@ export interface HourColour {
   colour: string;
 }
 
+export interface HourLogged {
+  week_id: string;
+  agent_id: string;
+  half_hours: number;
+}
+
+export const halfToHours = (half: number) => half / 2;
+
 export const cellKey = (weekId: string, agentId: string) => `${weekId}|${agentId}`;
 
 // Admin brush colours (stored by name so the palette can be restyled freely).

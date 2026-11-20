@@ -8,6 +8,7 @@ import {
   colourOf,
   fmtHrs,
   fmtRange,
+  halfToHours,
   nextMonday,
   type HourWeek,
 } from "@/lib/hours";
@@ -33,6 +34,9 @@ export default function AssignHoursClient({
   const [colours, setColours] = useState<Record<string, string>>(() =>
     Object.fromEntries(initial.colours.map((c) => [cellKey(c.week_id, c.agent_id), c.colour]))
   );
+  const [logged, setLogged] = useState<Record<string, number>>(() =>
+    Object.fromEntries(initial.logged.map((c) => [cellKey(c.week_id, c.agent_id), c.half_hours]))
+  );
   const [assigned, setAssigned] = useState(initial.assigned);
   const [search, setSearch] = useState("");
   const [showInactive, setShowInactive] = useState(false);
@@ -45,6 +49,7 @@ export default function AssignHoursClient({
     setWeeks(d.weeks);
     setCells(Object.fromEntries(d.cells.map((c) => [cellKey(c.week_id, c.agent_id), c.hours])));
     setColours(Object.fromEntries(d.colours.map((c) => [cellKey(c.week_id, c.agent_id), c.colour])));
+    setLogged(Object.fromEntries(d.logged.map((c) => [cellKey(c.week_id, c.agent_id), c.half_hours])));
     setAssigned(d.assigned);
   }, []);
 
@@ -165,6 +170,7 @@ export default function AssignHoursClient({
             assignedIds={new Set(assigned.filter((a) => a.project_id === p.id).map((a) => a.agent_id))}
             cells={cells}
             colours={colours}
+            logged={logged}
             brush={brush}
             forceOpen={q.length > 0}
             run={run}
@@ -201,6 +207,7 @@ function CampaignTable({
   assignedIds,
   cells,
   colours,
+  logged,
   brush,
   forceOpen,
   run,
@@ -216,6 +223,7 @@ function CampaignTable({
   assignedIds: Set<string>;
   cells: Record<string, number>;
   colours: Record<string, string>;
+  logged: Record<string, number>;
   brush: string | null | undefined;
   forceOpen: boolean;
   run: (fn: () => Promise<void>) => Promise<void>;
@@ -336,6 +344,7 @@ function CampaignTable({
                           key={`${w.id}|${r.id}|${cells[cellKey(w.id, r.id)] ?? ""}`}
                           value={cells[cellKey(w.id, r.id)]}
                           colour={colours[cellKey(w.id, r.id)]}
+                          logged={logged[cellKey(w.id, r.id)]}
                           brush={brush}
                           beginEdit={beginEdit}
                           endEdit={endEdit}
@@ -423,6 +432,7 @@ function CampaignTable({
 function Cell({
   value,
   colour,
+  logged,
   brush,
   beginEdit,
   endEdit,
@@ -431,6 +441,7 @@ function Cell({
 }: {
   value: number | undefined;
   colour: string | undefined;
+  logged: number | undefined;
   brush: string | null | undefined;
   beginEdit: () => void;
   endEdit: () => void;
@@ -472,6 +483,13 @@ function Cell({
         className={`w-full rounded border border-transparent bg-transparent px-1.5 py-0.5 text-center tabular-nums hover:border-[#c3c2b7] focus:border-[#2a78d6] focus:bg-white focus:outline-none ${painting ? "cursor-pointer" : ""}`}
         style={c ? { color: c.fg } : undefined}
       />
+      <div
+        className="text-center text-[10.5px] leading-tight tabular-nums text-[#898781]"
+        title="Hours logged so far in this week (UK dates)"
+        style={c ? { color: c.fg, opacity: 0.75 } : undefined}
+      >
+        ({fmtHrs(halfToHours(logged ?? 0))})
+      </div>
     </td>
   );
 }

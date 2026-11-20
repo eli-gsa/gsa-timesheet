@@ -2,6 +2,9 @@ import { createClient } from "@/lib/supabase/server";
 import { requireAgent } from "@/lib/data";
 import TimesheetGrid from "./TimesheetGrid";
 import HoursChangedBanner from "./HoursChangedBanner";
+import HoursLeftStrip, { type HoursLeftItem } from "./HoursLeftStrip";
+import { loggedPerWeek } from "@/lib/hoursData";
+import { halfToHours, type HourWeek } from "@/lib/hours";
 import { UK_ZONE, todayIn, zoneOf } from "@/lib/timezones";
 import { fetchAll } from "@/lib/aggregates";
 import type {
@@ -183,11 +186,67 @@ export default async function TimesheetPage({
     if (flag && !flag.seen_at) hoursChangedAt = flag.changed_at as string;
   }
 
+  // Hours left: per campaign with an assigned week running today (UK date),
+  // this week's logged vs assigned plus the campaign total. Campaigns with no
+  // such week are simply not listed; logging is never blocked by it.
+  const hoursLeft: HoursLeftItem[] = [];
+  try {
+    const projectIds = myProjects.map((p) => p.id);
+    if (projectIds.length > 0) {
+      const ukToday = todayIn(UK_ZONE);
+      const [weeks, mine, logged] = await Promise.all([
+        fetchAll<HourWeek>(
+          (f, t) =>
+            supabase
+              .from("hour_weeks")
+              .select("id, project_id, start_date, end_date")
+              .in("project_id", projectIds)
+              .order("start_date")
+              .order("id")
+              .range(f, t) as never
+        ),
+        fetchAll<{ week_id: string; hours: number }>(
+          (f, t) =>
+            supabase
+              .from("hour_assignments")
+              .select("week_id, hours")
+              .eq("agent_id", viewing.id)
+              .order("week_id")
+              .range(f, t) as never
+        ),
+        loggedPerWeek(supabase, viewing.id),
+      ]);
+      const assignedOf = new Map(mine.map((m) => [m.week_id, Number(m.hours)]));
+      const loggedOf = new Map(logged.filter((l) => l.agent_id === viewing.id).map((l) => [l.week_id, halfToHours(l.half_hours)]));
+      for (const p of myProjects) {
+        const ws = weeks.filter((w) => w.project_id === p.id);
+        const current = ws
+          .filter((w) => w.start_date <= ukToday && ukToday <= w.end_date && assignedOf.has(w.id))
+          .sort((a, b) => b.start_date.localeCompare(a.start_date))[0];
+        if (!current) continue;
+        hoursLeft.push({
+          projectId: p.id,
+          name: p.name,
+          color: p.color,
+          weekStart: current.start_date,
+          weekEnd: current.end_date,
+          weekAssigned: assignedOf.get(current.id) ?? 0,
+          weekLogged: loggedOf.get(current.id) ?? 0,
+          totalAssigned: ws.reduce((s, w) => s + (assignedOf.get(w.id) ?? 0), 0),
+          totalLogged: ws.reduce((s, w) => s + (loggedOf.get(w.id) ?? 0), 0),
+        });
+      }
+    }
+  } catch {
+    /* Assign Hours tables not installed yet: no strip */
+  }
+
   return (
     <>
       {hoursChangedAt && (
         <HoursChangedBanner key={hoursChangedAt} changedAt={hoursChangedAt} />
       )}
+      <HoursLeftStrip items={hoursLeft} />
       <TimesheetGrid
         key={viewing.id}
         me={me}

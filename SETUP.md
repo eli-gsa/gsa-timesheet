@@ -69,6 +69,10 @@ Total hands-on time: roughly 30–45 minutes.
      "hours changed" flag for agents. New tables only; logged hours and the old
      allocation tables are untouched (the old allocation feature is removed from
      the app, its data is kept). Run **before** deploying.
+   - `supabase/migrations/0014_hour_week_logged.sql` — hours logged inside each
+     Assign Hours week (UK dates), for the hours-left strip, the Assigned Hours
+     page and the admin table. One function and one index; no data changes. Run
+     **before** deploying.
    - *(Optional, only if the read-only `reporting` schema exists)*
      `supabase/reporting_views_utc.sql` — adds `timezone`, `agent_timezone`
      and `starts_at_utc` to the reporting views.

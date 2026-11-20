@@ -184,7 +184,7 @@ export default function InvoicingClient({
         <div>
           <h2 className="text-[19px] font-semibold">Invoicing</h2>
           <p className="text-[12.5px] text-[#898781]">
-            {monthLabelLong(month)} · {fmtHours(grandHH * 0.5)}h · {currency} {formatNumber(r2(grandAmt))}
+            {monthLabelLong(month)} (UK time) · {fmtHours(grandHH * 0.5)}h · {currency} {formatNumber(r2(grandAmt))}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">

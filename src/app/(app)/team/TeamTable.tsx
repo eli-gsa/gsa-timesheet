@@ -92,7 +92,10 @@ export default function TeamTable({
             <tr className="border-b border-[#c3c2b7] bg-[#f3f2ee]">
               <th className="text-left px-3 py-2 text-[11px] uppercase tracking-wide text-[#898781]">Name</th>
               <th className="text-left px-3 py-2 text-[11px] uppercase tracking-wide text-[#898781]">Role</th>
-              <th className="text-left px-3 py-2 text-[11px] uppercase tracking-wide text-[#898781]">
+              <th
+                className="text-left px-3 py-2 text-[11px] uppercase tracking-wide text-[#898781]"
+                title="The agent types and sees their own time in this zone. Hours are saved as UK time automatically. Blank = UK."
+              >
                 Timezone
               </th>
               <th className="text-left px-3 py-2 text-[11px] uppercase tracking-wide text-[#898781]">

@@ -8,6 +8,7 @@ const ADMIN_LINKS = [
   { href: "/", label: "Overview" },
   { href: "/team", label: "Agents" },
   { href: "/projects", label: "Projects" },
+  { href: "/assign-hours", label: "Assign Hours" },
   { href: "/reports", label: "Reports" },
   { href: "/invoicing", label: "Invoicing" },
   { href: "/audit", label: "Audit log" },
@@ -15,7 +16,11 @@ const ADMIN_LINKS = [
 ];
 
 const SUMMARY_LINK = { href: "/summary", label: "My Summary" };
-const AGENT_LINKS = [{ href: "/timesheet", label: "My Timesheet" }, SUMMARY_LINK];
+const AGENT_LINKS = [
+  { href: "/timesheet", label: "My Timesheet" },
+  SUMMARY_LINK,
+  { href: "/assigned-hours", label: "Assigned Hours" },
+];
 
 export default function NavLinks({ role }: { role: Role }) {
   const pathname = usePathname();

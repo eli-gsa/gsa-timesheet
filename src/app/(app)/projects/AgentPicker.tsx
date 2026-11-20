@@ -121,6 +121,10 @@ export default function AgentPicker({
               ))
             )}
           </div>
+          <p className="px-3 py-2 border-t border-[#e1e0d9] text-[11px] text-[#898781]">
+            Unticking only removes the project from the agent&apos;s paint list. Their logged hours stay on record, and
+            they can still see (not edit) those hours.
+          </p>
         </div>
       )}
     </div>

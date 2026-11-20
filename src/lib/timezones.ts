@@ -1,9 +1,30 @@
-// Timezone helpers. Timesheet entries are stored as (local date, half-hour
-// slot) on each agent's own wall clock - see supabase/migrations/0006 - and
-// an agent's IANA timezone (e.g. "Europe/London") is what turns that local
-// time into a real instant for reporting. These helpers are pure (no React,
+// Timezone helpers. Timesheet entries are stored as a real instant plus the
+// same moment on the UK wall clock (entry_date / slot, Europe/London with
+// BST/GMT) - see supabase/migrations/0012. Agents type and see their own
+// local time; the database converts. An agent's IANA timezone (set by an
+// admin) is only used for that conversion. These helpers are pure (no React,
 // no server-only APIs) so both Server Components and Client Components can
 // import them.
+
+// The zone everything is stored and reported in.
+export const UK_ZONE = "Europe/London";
+
+// The zone an agent works in: their own, or UK when none is set.
+export function zoneOf(tz: string | null | undefined): string {
+  return tz && isValidTimeZone(tz) ? tz : UK_ZONE;
+}
+
+// "UTC+2" / "UTC+1" style label for a zone right now.
+export function zoneOffsetLabel(tz: string, now: Date = new Date()): string {
+  try {
+    const part = new Intl.DateTimeFormat("en-GB", { timeZone: tz, timeZoneName: "shortOffset" })
+      .formatToParts(now)
+      .find((p) => p.type === "timeZoneName")?.value;
+    return (part ?? "").replace("GMT", "UTC") || "UTC";
+  } catch {
+    return "";
+  }
+}
 
 // Shown first in the admin's timezone picker; the full IANA list follows.
 export const COMMON_TIMEZONES = [

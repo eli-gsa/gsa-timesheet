@@ -2,15 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { Agent, GridView, Lead, LeadType, Project, TimesheetEntry, TimesheetView } from "@/lib/types";
+import type { Agent, GridView, HistoryProject, Lead, LeadType, Project, TimesheetEntry, TimesheetView } from "@/lib/types";
 import { contrastText, fmtHours, slotRangeLabel, slotTime } from "@/lib/types";
 import { assignSlots, clearSlots, getAgentRangeTotals } from "@/lib/actions/timesheet";
 import { addLead, deleteLead, updateLead } from "@/lib/actions/leads";
 import { updateAgentViewWindow, updateTimesheetView } from "@/lib/actions/agents";
 import Modal, { ModalButton } from "@/components/Modal";
 import { useBusyTransition } from "@/components/BusyOverlay";
-import { todayIn } from "@/lib/timezones";
-import { paceInfo, figures, windowLabel, type AllocStatus } from "@/lib/allocation";
+import { UK_ZONE, todayIn, zoneOffsetLabel } from "@/lib/timezones";
 
 function daysInMonth(y: number, m: number) {
   return new Date(y, m, 0).getDate();
@@ -53,7 +52,6 @@ function mondayOfToday(tz: string | null) {
 function currentYmIn(tz: string | null) {
   return todayIn(tz).slice(0, 7);
 }
-export type Allocation = { allocated: number | null; loggedHH: number };
 
 function dayLong(date: string) {
   return new Date(`${date}T00:00:00`).toLocaleDateString(undefined, {
@@ -80,9 +78,11 @@ export default function TimesheetGrid({
   month,
   weekStart,
   day,
-  allocStatus,
-  today,
+  zone,
+  zoneMode,
+  agentZone,
   projects,
+  historyProjects,
   entries,
   leads,
   leadTypes,
@@ -94,9 +94,11 @@ export default function TimesheetGrid({
   month: string;
   weekStart: string;
   day: string;
-  allocStatus: AllocStatus[];
-  today: string;
+  zone: string;
+  zoneMode: "local" | "uk";
+  agentZone: string;
   projects: Project[];
+  historyProjects: HistoryProject[];
   entries: TimesheetEntry[];
   leads: Lead[];
   leadTypes: LeadType[];
@@ -159,21 +161,28 @@ export default function TimesheetGrid({
   const projectById = useMemo(() => {
     const map = new Map<string, Project>();
     for (const p of projects) map.set(p.id, p);
+    for (const p of historyProjects) map.set(p.id, p);
     return map;
-  }, [projects]);
+  }, [projects, historyProjects]);
+
+  // Projects the agent was unassigned from (or that were deactivated): their
+  // logged hours stay visible but are read-only for the agent. Admins can still
+  // correct them.
+  const historyById = useMemo(() => new Map(historyProjects.map((p) => [p.id, p])), [historyProjects]);
+  const lockHistory = me.role !== "admin";
+  const isLockedCell = (date: string, slot: number) => {
+    if (!lockHistory) return false;
+    const e = entryMap.get(`${date}|${slot}`);
+    return !!e && historyById.has(e.project_id);
+  };
+
+  // History projects that actually have time in the visible range (legend).
+  const historyInRange = useMemo(() => {
+    const seen = new Set(entries.map((e) => e.project_id));
+    return historyProjects.filter((p) => seen.has(p.id));
+  }, [entries, historyProjects]);
 
   const totalHours = entries.length * 0.5;
-
-  // The open campaign allocation per project (size + hours logged inside its
-  // counting window): feeds the Allocated / Logged / Left columns of Project
-  // Summary. Weekly/monthly caps show in the header strip only.
-  const allocations = useMemo(() => {
-    const m: Record<string, Allocation> = {};
-    for (const a of allocStatus) {
-      if (a.kind === "campaign") m[a.projectId] = { allocated: a.totalHours, loggedHH: a.loggedHH ?? 0 };
-    }
-    return m;
-  }, [allocStatus]);
 
   // Day view's side table: half-hours per project for the one visible day
   // (entries only ever holds that day when view === "day").
@@ -196,7 +205,14 @@ export default function TimesheetGrid({
   const slotColWidth = 92;
   const tableWidth = dayColWidth + slots.length * slotColWidth;
 
-  function pushParams(extra: { month?: string; week?: string; day?: string; view?: GridView; agent?: string }) {
+  function pushParams(extra: {
+    month?: string;
+    week?: string;
+    day?: string;
+    view?: GridView;
+    agent?: string;
+    mode?: "local" | "uk";
+  }) {
     const sp = new URLSearchParams();
     // Keep the current view across agent switches; navigation helpers pass
     // the view they want explicitly.
@@ -205,21 +221,24 @@ export default function TimesheetGrid({
     sp.set("week", extra.week ?? weekStart);
     sp.set("day", extra.day ?? day);
     if (me.role === "admin") sp.set("agent", extra.agent ?? viewing.id);
+    // Admins can flip the grid between the agent's clock and UK time.
+    const m2 = extra.mode ?? zoneMode;
+    if (me.role === "admin" && m2 === "uk") sp.set("tz", "uk");
     router.push(`/timesheet?${sp.toString()}`);
   }
 
   function navMonth(delta: number) {
-    const next = delta === 0 ? currentYmIn(viewing.timezone) : addMonths(month, delta);
+    const next = delta === 0 ? currentYmIn(zone) : addMonths(month, delta);
     setSelection(new Set());
     pushParams({ month: next, view: "month" });
   }
   function navWeek(delta: number) {
-    const next = delta === 0 ? mondayOfToday(viewing.timezone) : addDaysStr(weekStart, delta * 7);
+    const next = delta === 0 ? mondayOfToday(zone) : addDaysStr(weekStart, delta * 7);
     setSelection(new Set());
     pushParams({ week: next, view: "week" });
   }
   function navDay(delta: number) {
-    const next = delta === 0 ? todayIn(viewing.timezone) : addDaysStr(day, delta);
+    const next = delta === 0 ? todayIn(zone) : addDaysStr(day, delta);
     setSelection(new Set());
     pushParams({ day: next, view: "day" });
   }
@@ -228,8 +247,8 @@ export default function TimesheetGrid({
     setSelection(new Set());
     pushParams({
       view: next,
-      week: next === "week" ? mondayOfToday(viewing.timezone) : undefined,
-      day: next === "day" ? todayIn(viewing.timezone) : undefined,
+      week: next === "week" ? mondayOfToday(zone) : undefined,
+      day: next === "day" ? todayIn(zone) : undefined,
     });
     // The single-day view is a transient drill-down, not a default.
     if (next === "day") return;
@@ -261,14 +280,14 @@ export default function TimesheetGrid({
   }
 
   function onCellMouseDown(date: string, slot: number) {
-    if (!canEdit) return;
+    if (!canEdit || isLockedCell(date, slot)) return;
     const key = cellKey(date, slot);
     const mode = selection.has(key) ? "deselect" : "select";
     dragRef.current = { mode };
     toggleCell(date, slot, mode);
   }
   function onCellMouseEnter(date: string, slot: number) {
-    if (!canEdit || !dragRef.current) return;
+    if (!canEdit || !dragRef.current || isLockedCell(date, slot)) return;
     toggleCell(date, slot, dragRef.current.mode);
   }
   function endDrag() {
@@ -285,7 +304,7 @@ export default function TimesheetGrid({
   function handleAssign(projectId: string) {
     const cells = selectedCells();
     startTransition(async () => {
-      await assignSlots(viewing.id, cells, projectId);
+      await assignSlots(viewing.id, cells, projectId, zoneMode);
       setSelection(new Set());
       setAssignOpen(false);
       router.refresh();
@@ -294,7 +313,7 @@ export default function TimesheetGrid({
   function handleClear() {
     const cells = selectedCells();
     startTransition(async () => {
-      await clearSlots(viewing.id, cells);
+      await clearSlots(viewing.id, cells, zoneMode);
       setSelection(new Set());
       router.refresh();
     });
@@ -305,18 +324,28 @@ export default function TimesheetGrid({
     const entry = entryMap.get(key);
     const project = entry ? projectById.get(entry.project_id) : undefined;
     const selected = selection.has(key);
+    const past = entry ? historyById.get(entry.project_id) : undefined;
+    const locked = lockHistory && !!past;
+    const base = selected ? "color-mix(in srgb, #2a78d6 38%, white)" : project?.color ?? undefined;
     return (
       <td
         key={s}
         onMouseDown={() => onCellMouseDown(date, s)}
         onMouseEnter={() => onCellMouseEnter(date, s)}
-        className={`border border-[#e1e0d9] p-0 box-border ${canEdit ? "cursor-pointer" : "cursor-default"}`}
+        className={`border border-[#e1e0d9] p-0 box-border ${
+          locked ? "cursor-not-allowed" : canEdit ? "cursor-pointer" : "cursor-default"
+        }`}
         style={{
           width,
           height,
-          background: selected ? "color-mix(in srgb, #2a78d6 38%, white)" : project?.color ?? undefined,
+          background: base,
+          // Hatched = hours on a project the agent is no longer on.
+          backgroundImage:
+            past && !selected
+              ? "repeating-linear-gradient(135deg, rgba(255,255,255,0.45) 0 4px, transparent 4px 8px)"
+              : undefined,
         }}
-        title={project?.name}
+        title={project ? (past ? `${project.name} (${past.reason}, read-only)` : project.name) : undefined}
       >
         {project && (
           <span
@@ -437,6 +466,32 @@ export default function TimesheetGrid({
         </div>
       </div>
 
+      <div className="flex items-center gap-2.5 mb-2 flex-wrap text-[12px] text-[#52514e]">
+        <span>
+          Times shown in <strong>{zone.replace(/_/g, " ")}</strong> ({zoneOffsetLabel(zone)})
+          {zone !== UK_ZONE && <span className="text-[#898781]"> · saved as UK time</span>}
+        </span>
+        {me.role === "admin" && agentZone !== UK_ZONE && (
+          <span className="inline-flex rounded-md border border-[#c3c2b7] overflow-hidden text-[12px]">
+            {(["local", "uk"] as const).map((m2) => (
+              <button
+                key={m2}
+                type="button"
+                disabled={isPending}
+                className={`px-2.5 py-1 ${zoneMode === m2 ? "bg-[#2a78d6] text-white" : "bg-white hover:bg-[#f3f2ee]"}`}
+                onClick={() => {
+                  if (m2 === zoneMode) return;
+                  setSelection(new Set());
+                  pushParams({ mode: m2 });
+                }}
+              >
+                {m2 === "uk" ? "UK time" : "Agent time"}
+              </button>
+            ))}
+          </span>
+        )}
+      </div>
+
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <button
           className="rounded-md border border-[#c3c2b7] bg-white px-2.5 py-1.5 text-[13px] hover:bg-[#f3f2ee] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white"
@@ -465,10 +520,20 @@ export default function TimesheetGrid({
               {p.name}
             </span>
           ))}
+          {historyInRange.map((p) => (
+            <span key={p.id} className="inline-flex items-center gap-1.5 text-[#898781]">
+              <span
+                className="w-2 h-2 rounded-sm"
+                style={{
+                  background: p.color,
+                  backgroundImage: "repeating-linear-gradient(135deg, rgba(255,255,255,0.45) 0 2px, transparent 2px 4px)",
+                }}
+              />
+              {p.name} <em className="not-italic text-[10.5px] uppercase tracking-wide">({p.reason})</em>
+            </span>
+          ))}
         </div>
       </div>
-
-      <AllocationStrip projects={projects} items={allocStatus} today={today} />
 
       {view === "day" ? (
         <div className="flex items-start gap-4 flex-wrap">
@@ -523,6 +588,18 @@ export default function TimesheetGrid({
                     </tr>
                   );
                 })}
+                {historyInRange.map((p) => (
+                  <tr key={p.id} className="border-t border-[#e1e0d9] text-[#898781]">
+                    <td className="px-2.5 py-1">
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: p.color }} />
+                        {p.name}
+                        <em className="not-italic text-[10.5px] uppercase tracking-wide">({p.reason})</em>
+                      </span>
+                    </td>
+                    <td className="px-2.5 py-1 text-right tabular-nums">{fmtHours((dayByProject.get(p.id) ?? 0) * 0.5)}</td>
+                  </tr>
+                ))}
                 <tr className="border-t border-[#e1e0d9] bg-[#f3f2ee]">
                   <td className="px-2.5 py-1 font-semibold">Day total</td>
                   <td className="px-2.5 py-1 text-right tabular-nums font-semibold">{fmtHours(totalHours)}</td>
@@ -654,12 +731,13 @@ export default function TimesheetGrid({
         <ProjectSummaryModal
           agentId={viewing.id}
           agentName={viewing.name}
-          timezone={viewing.timezone}
-          allocations={allocations}
+          timezone={zone}
+          zoneMode={zoneMode}
           view={view === "day" ? "month" : view}
           initialMonth={view === "day" ? day.slice(0, 7) : month}
           initialWeekStart={weekStart}
           projects={projects}
+          historyProjects={historyProjects}
           onClose={() => setSummaryOpen(false)}
         />
       )}
@@ -730,21 +808,23 @@ function ProjectSummaryModal({
   agentId,
   agentName,
   timezone,
-  allocations,
+  zoneMode,
   view,
   initialMonth,
   initialWeekStart,
   projects,
+  historyProjects,
   onClose,
 }: {
   agentId: string;
   agentName: string;
   timezone: string | null;
-  allocations: Record<string, Allocation>;
+  zoneMode: "local" | "uk";
   view: TimesheetView;
   initialMonth: string;
   initialWeekStart: string;
   projects: Project[];
+  historyProjects: HistoryProject[];
   onClose: () => void;
 }) {
   const [anchor, setAnchor] = useState(view === "week" ? initialWeekStart : initialMonth);
@@ -769,7 +849,7 @@ function ProjectSummaryModal({
     const { start, end } = rangeOf(a);
     startTransition(async () => {
       try {
-        const res = await getAgentRangeTotals(agentId, start, end);
+        const res = await getAgentRangeTotals(agentId, start, end, zoneMode);
         setTotals(res.totals);
         setStandardDayHours(res.standardDayHours);
         setLoadError(null);
@@ -799,22 +879,24 @@ function ProjectSummaryModal({
     load(next);
   }
   const { label } = rangeOf(anchor);
-  const rows = projects.map((p) => {
+  const toRow = (p: Project, reason?: string) => {
     const hh = totals?.[p.id] ?? 0;
     const hrs = hh * 0.5;
-    return { project: p, hh, hrs, days: hrs / standardDayHours };
-  });
+    return { project: p, hh, hrs, days: hrs / standardDayHours, reason };
+  };
+  // Assigned projects always get a row; projects the agent was unassigned
+  // from only appear for periods they actually logged time on them.
+  const rows = [
+    ...projects.map((p) => toRow(p)),
+    ...historyProjects.map((p) => toRow(p, p.reason)).filter((r) => r.hh > 0),
+  ];
   const totHH = rows.reduce((a, r) => a + r.hh, 0);
-  // Allocation columns only appear once at least one project has an
-  // allocation. They're all-time, so they don't change as you page through
-  // months/weeks.
-  const showAlloc = projects.some((p) => allocations[p.id]?.allocated != null);
 
   return (
     <Modal
       title={`Project Summary: ${agentName}`}
       onClose={onClose}
-      maxWidth={showAlloc ? 760 : 560}
+      maxWidth={560}
       footer={<ModalButton onClick={onClose}>Close</ModalButton>}
     >
       <div className="flex items-center gap-2 mb-3">
@@ -844,30 +926,23 @@ function ProjectSummaryModal({
                 <th className="text-right px-2.5 py-1.5 text-[11px] uppercase text-[#898781]">
                   Days (÷{standardDayHours}h)
                 </th>
-                {showAlloc && (
-                  <>
-                    <th className="text-right px-2.5 py-1.5 text-[11px] uppercase text-[#898781] border-l border-[#e1e0d9]">
-                      Allocated
-                    </th>
-                    <th className="text-right px-2.5 py-1.5 text-[11px] uppercase text-[#898781]">Logged</th>
-                    <th className="text-right px-2.5 py-1.5 text-[11px] uppercase text-[#898781]">Left</th>
-                  </>
-                )}
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.project.id} className="border-t border-[#e1e0d9]">
+                <tr key={r.project.id} className={`border-t border-[#e1e0d9] ${r.reason ? "text-[#898781]" : ""}`}>
                   <td className="px-2.5 py-1">
                     <span className="inline-flex items-center gap-1.5">
                       <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: r.project.color }} />
                       {r.project.name}
+                      {r.reason && (
+                        <em className="not-italic text-[10.5px] uppercase tracking-wide">({r.reason})</em>
+                      )}
                     </span>
                   </td>
                   <td className="px-2.5 py-1 text-right tabular-nums">{r.hh}</td>
                   <td className="px-2.5 py-1 text-right tabular-nums">{fmtHours(r.hrs)}</td>
                   <td className="px-2.5 py-1 text-right tabular-nums">{fmtHours(r.days)}</td>
-                  {showAlloc && <AllocCells alloc={allocations[r.project.id]} />}
                 </tr>
               ))}
               <tr className="border-t border-[#e1e0d9] bg-[#f3f2ee]">
@@ -877,133 +952,12 @@ function ProjectSummaryModal({
                 <td className="px-2.5 py-1 text-right tabular-nums font-semibold">
                   {fmtHours((totHH * 0.5) / standardDayHours)}
                 </td>
-                {showAlloc && <td colSpan={3} className="border-l border-[#e1e0d9]" />}
               </tr>
             </tbody>
           </table>
         </div>
       )}
     </Modal>
-  );
-}
-
-function allocState(a: Allocation | undefined) {
-  if (!a || a.allocated == null) return null;
-  const logged = a.loggedHH * 0.5;
-  const left = a.allocated - logged;
-  const pct = a.allocated > 0 ? logged / a.allocated : left < 0 ? 2 : 0;
-  // Amber at 90% used (or <= 10% left), red once over the allocation.
-  const tone = left < 0 ? "over" : pct >= 0.9 ? "low" : "ok";
-  return { allocated: a.allocated, logged, left, pct, tone } as const;
-}
-const TONE_TEXT = { ok: "text-[#1a1a1a]", low: "text-[#b87400]", over: "text-[#d03b3b]" } as const;
-const TONE_BAR = { ok: "#2a78d6", low: "#eda100", over: "#d03b3b" } as const;
-
-function AllocCells({ alloc }: { alloc: Allocation | undefined }) {
-  const st = allocState(alloc);
-  if (!st) {
-    return (
-      <>
-        <td className="px-2.5 py-1 text-right text-[#898781] border-l border-[#e1e0d9]">—</td>
-        <td className="px-2.5 py-1 text-right tabular-nums text-[#898781]">
-          {alloc ? fmtHours(alloc.loggedHH * 0.5) : "—"}
-        </td>
-        <td className="px-2.5 py-1 text-right text-[#898781]">—</td>
-      </>
-    );
-  }
-  return (
-    <>
-      <td className="px-2.5 py-1 text-right tabular-nums border-l border-[#e1e0d9]">{fmtHours(st.allocated)}</td>
-      <td className="px-2.5 py-1 text-right tabular-nums">{fmtHours(st.logged)}</td>
-      <td className={`px-2.5 py-1 text-right tabular-nums font-semibold ${TONE_TEXT[st.tone]}`}>
-        {st.left < 0 ? `${fmtHours(-st.left)} over` : fmtHours(st.left)}
-      </td>
-    </>
-  );
-}
-
-const KIND_ORDER = { campaign: 0, weekly: 1, monthly: 2 } as const;
-const KIND_LABEL = { campaign: "", weekly: " · weekly cap", monthly: " · monthly cap" } as const;
-const KIND_SCOPE = { campaign: "", weekly: "this week", monthly: "this month" } as const;
-
-// "Hours left" for each open allocation of the agent's projects: a campaign
-// total counted over its window, or a weekly/monthly cap that resets by itself.
-// With an end date, also the pace needed to use the hours up in time.
-function AllocationStrip({
-  projects,
-  items,
-  today,
-}: {
-  projects: Project[];
-  items: AllocStatus[];
-  today: string;
-}) {
-  const byId = new Map(projects.map((p) => [p.id, p]));
-  const list = items
-    .filter((a) => byId.has(a.projectId))
-    .sort(
-      (a, b) =>
-        (byId.get(a.projectId)!.name).localeCompare(byId.get(b.projectId)!.name) ||
-        KIND_ORDER[a.kind] - KIND_ORDER[b.kind]
-    );
-  if (list.length === 0) return null;
-  return (
-    <div className="flex flex-wrap gap-2 mb-3">
-      {list.map((a) => {
-        const project = byId.get(a.projectId)!;
-        const f = figures(a);
-        const pace = paceInfo(a, today);
-        return (
-          <div key={a.allocationId} className="border border-[#e1e0d9] rounded-lg bg-white px-3 py-1.5 min-w-[200px] max-w-[280px]">
-            <div className="flex items-center justify-between gap-3 text-[12px]">
-              <span className="inline-flex items-center gap-1.5 font-medium">
-                <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: project.color }} />
-                {project.name}
-                <span className="font-normal text-[#898781]">{KIND_LABEL[a.kind]}</span>
-              </span>
-              <span className={`tabular-nums font-semibold whitespace-nowrap ${TONE_TEXT[f.tone]}`}>
-                {f.left < 0 ? `${fmtHours(-f.left)}h over` : `${fmtHours(f.left)}h left`}
-              </span>
-            </div>
-            <div className="h-1.5 rounded-full bg-[#ececE6] mt-1 overflow-hidden">
-              <div
-                className="h-full rounded-full"
-                style={{ width: `${Math.min(100, f.pct * 100)}%`, background: TONE_BAR[f.tone] }}
-              />
-            </div>
-            <div className="text-[11px] text-[#898781] tabular-nums mt-0.5">
-              {fmtHours(f.logged)} of {fmtHours(f.total)}h logged ·{" "}
-              {a.kind === "campaign" ? windowLabel(a) : KIND_SCOPE[a.kind]}
-            </div>
-            {pace && (
-              <div className="text-[11px] mt-0.5 tabular-nums">
-                {pace.ended ? (
-                  <span className="text-[#b87400]">Ended with {fmtHours(pace.remainingH)}h unused</span>
-                ) : pace.notStarted ? (
-                  <span className="text-[#898781]">Starts {windowLabel({ startDate: a.startDate, endDate: null }).replace("from ", "")}</span>
-                ) : (
-                  <>
-                    <span className="text-[#52514e]">
-                      Needs {fmtHours(Math.round((pace.requiredPerDay ?? 0) * 10) / 10)}h/day · {pace.daysLeft} working day
-                      {pace.daysLeft === 1 ? "" : "s"} left
-                    </span>
-                    {pace.onTrack !== null && (
-                      <span className={`ml-1.5 font-semibold ${pace.onTrack ? "text-[#1baf7a]" : "text-[#b87400]"}`}>
-                        {pace.onTrack ? "On track" : "Behind"}
-                        {pace.avgPerDay !== null && (
-                          <span className="font-normal text-[#898781]"> (avg {fmtHours(Math.round(pace.avgPerDay * 10) / 10)}h/day)</span>
-                        )}
-                      </span>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
   );
 }
 

@@ -111,3 +111,7 @@ export function contrastText(hex: string): string {
   const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
   return lum > 0.6 ? "#1a1a1a" : "#ffffff";
 }
+
+// A project the viewed agent has logged time on but can no longer paint:
+// they were unassigned from it, or it was deactivated. Shown read-only.
+export type HistoryProject = Project & { reason: "unassigned" | "inactive" };

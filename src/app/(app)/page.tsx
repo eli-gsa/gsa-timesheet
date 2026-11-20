@@ -3,11 +3,8 @@ import { getCurrentAgent } from "@/lib/data";
 import { redirect } from "next/navigation";
 import OverviewClient from "./OverviewClient";
 import { hoursByAgent, hoursByDay, hoursByProject } from "@/lib/aggregates";
+import { UK_ZONE, todayIn } from "@/lib/timezones";
 
-function currentYm() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
 function monthLabel(ym: string) {
   const [y, m] = ym.split("-").map(Number);
   return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
@@ -22,12 +19,14 @@ export default async function OverviewPage() {
   if (me.role !== "admin") redirect("/timesheet");
 
   const supabase = await createClient();
-  const month = currentYm();
+  // Everything is stored in UK time, so "this month" and "today" are UK's.
+  const ukToday = todayIn(UK_ZONE);
+  const month = ukToday.slice(0, 7);
   const [y, m] = month.split("-").map(Number);
   const monthStart = `${month}-01`;
   const monthEnd = `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`;
 
-  const today = new Date();
+  const today = new Date(`${ukToday}T12:00:00`);
   const trendStart = new Date(today);
   trendStart.setDate(trendStart.getDate() - 29);
 

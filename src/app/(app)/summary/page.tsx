@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { requireAgent } from "@/lib/data";
-import { todayIn } from "@/lib/timezones";
+import { todayIn, zoneOf, zoneOffsetLabel } from "@/lib/timezones";
 import { addMonthsYm, isMonth, monthLabelLong } from "@/lib/invoicing";
 import { fmtHours } from "@/lib/types";
 
@@ -35,7 +35,9 @@ function dayLabel(s: string) {
 export default async function SummaryPage({ searchParams }: { searchParams: Promise<{ month?: string }> }) {
   const me = await requireAgent();
   const params = await searchParams;
-  const today = todayIn(me.timezone);
+  // Agents see their own clock here; the system stores UK time and converts.
+  const zone = zoneOf(me.timezone);
+  const today = todayIn(zone);
   const month = isMonth(params.month) ? params.month : today.slice(0, 7);
 
   const [y, m] = month.split("-").map(Number);
@@ -44,7 +46,7 @@ export default async function SummaryPage({ searchParams }: { searchParams: Prom
 
   const supabase = await createClient();
   const [{ data: dayRows }, { data: projects }, { data: setting }] = await Promise.all([
-    supabase.rpc("agent_daily_totals", { p_agent: me.id, p_start: monthStart, p_end: monthEnd }),
+    supabase.rpc("agent_daily_totals_local", { p_agent: me.id, p_start: monthStart, p_end: monthEnd, p_tz: zone }),
     supabase.from("projects").select("id, name, color"),
     supabase.from("settings").select("value").eq("key", "standard_work_day").maybeSingle(),
   ]);
@@ -89,7 +91,8 @@ export default async function SummaryPage({ searchParams }: { searchParams: Prom
         <div>
           <h2 className="text-[19px] font-semibold">My summary</h2>
           <p className="text-[12.5px] text-[#898781]">
-            {monthLabelLong(month)} · <span className="tabular-nums">{fmtHours(monthTotalHH * 0.5)}h</span> worked
+            {monthLabelLong(month)} · <span className="tabular-nums">{fmtHours(monthTotalHH * 0.5)}h</span> worked ·{" "}
+            {zone.replace(/_/g, " ")} time ({zoneOffsetLabel(zone)})
           </p>
         </div>
         <form method="get" className="flex items-center gap-2">

@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/data";
-import { todayIn } from "@/lib/timezones";
+import { UK_ZONE, todayIn } from "@/lib/timezones";
 import { DEFAULT_CURRENCY, isCurrency, isMonth, type RateCell } from "@/lib/invoicing";
 import InvoicingClient from "./InvoicingClient";
 
@@ -13,7 +13,7 @@ export default async function InvoicingPage({
   const params = await searchParams;
   const supabase = await createClient();
 
-  const month = isMonth(params.month) ? params.month : todayIn(me.timezone).slice(0, 7);
+  const month = isMonth(params.month) ? params.month : todayIn(UK_ZONE).slice(0, 7);
   const monthStart = `${month}-01`;
 
   // Currency: explicit ?currency=, else the one this admin last saved a rate

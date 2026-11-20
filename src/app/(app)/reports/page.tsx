@@ -3,14 +3,14 @@ import { requireAdmin } from "@/lib/data";
 import type { Agent, Project, TimesheetEntry } from "@/lib/types";
 import ReportsClient from "./ReportsClient";
 import { fetchAll } from "@/lib/aggregates";
+import { UK_ZONE, todayIn } from "@/lib/timezones";
 
+// Reports are in UK time: default range = this UK month so far.
 function defaultFrom() {
-  const d = new Date();
-  d.setDate(1);
-  return d.toISOString().slice(0, 10);
+  return `${todayIn(UK_ZONE).slice(0, 7)}-01`;
 }
 function defaultTo() {
-  return new Date().toISOString().slice(0, 10);
+  return todayIn(UK_ZONE);
 }
 
 export default async function ReportsPage({

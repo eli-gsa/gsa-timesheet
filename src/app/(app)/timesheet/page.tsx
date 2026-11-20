@@ -1,10 +1,18 @@
 import { createClient } from "@/lib/supabase/server";
 import { requireAgent } from "@/lib/data";
 import TimesheetGrid from "./TimesheetGrid";
-import { todayIn } from "@/lib/timezones";
-import { mapStatusRows } from "@/lib/allocation";
+import HoursChangedBanner from "./HoursChangedBanner";
+import { UK_ZONE, todayIn, zoneOf } from "@/lib/timezones";
 import { fetchAll } from "@/lib/aggregates";
-import type { Agent, GridView, Lead, LeadType, Project, TimesheetEntry } from "@/lib/types";
+import type {
+  Agent,
+  GridView,
+  HistoryProject,
+  Lead,
+  LeadType,
+  Project,
+  TimesheetEntry,
+} from "@/lib/types";
 
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
@@ -29,7 +37,14 @@ function addDaysStr(dateStr: string, n: number): string {
 export default async function TimesheetPage({
   searchParams,
 }: {
-  searchParams: Promise<{ agent?: string; month?: string; view?: string; week?: string; day?: string }>;
+  searchParams: Promise<{
+    agent?: string;
+    month?: string;
+    view?: string;
+    week?: string;
+    day?: string;
+    tz?: string;
+  }>;
 }) {
   const me = await requireAgent();
   const params = await searchParams;
@@ -41,21 +56,42 @@ export default async function TimesheetPage({
   let viewingId = me.id;
   if (me.role === "admin" && params.agent) viewingId = params.agent;
 
-  const [{ data: viewingAgent }, { data: allAgents }, { data: allProjects }, { data: assignments }] =
-    await Promise.all([
-      supabase.from("agents").select("*").eq("id", viewingId).maybeSingle(),
-      me.role === "admin"
-        ? supabase.from("agents").select("*").order("name")
-        : Promise.resolve({ data: null }),
-      supabase.from("projects").select("*").eq("active", true).order("name"),
-      supabase.from("project_agents").select("project_id, agent_id, allocated_hours").eq("agent_id", viewingId),
-    ]);
+  const [
+    { data: viewingAgent },
+    { data: allAgents },
+    { data: allProjects },
+    { data: assignments },
+  ] = await Promise.all([
+    supabase.from("agents").select("*").eq("id", viewingId).maybeSingle(),
+    me.role === "admin"
+      ? supabase.from("agents").select("*").order("name")
+      : Promise.resolve({ data: null }),
+    supabase.from("projects").select("*").order("name"),
+    supabase
+      .from("project_agents")
+      .select("project_id, agent_id")
+      .eq("agent_id", viewingId),
+  ]);
 
   const viewing: Agent = (viewingAgent as Agent) ?? me;
-  const assignedProjectIds = new Set((assignments ?? []).map((a) => a.project_id));
-  const myProjects: Project[] = ((allProjects as Project[]) ?? []).filter((p) =>
-    assignedProjectIds.has(p.id)
+  const assignedProjectIds = new Set(
+    (assignments ?? []).map((a) => a.project_id),
   );
+  // myProjects = what the agent can paint with (assigned + active). Everything
+  // else stays known to the grid so hours already logged on a project they've
+  // since been unassigned from (or that was deactivated) still show, read-only.
+  const everyProject = (allProjects as Project[]) ?? [];
+  const myProjects: Project[] = everyProject.filter(
+    (p) => assignedProjectIds.has(p.id) && p.active,
+  );
+  const historyProjects: HistoryProject[] = everyProject
+    .filter((p) => !(assignedProjectIds.has(p.id) && p.active))
+    .map((p) => ({
+      ...p,
+      reason: assignedProjectIds.has(p.id)
+        ? ("inactive" as const)
+        : ("unassigned" as const),
+    }));
 
   // Resolve the active view: an explicit ?view= wins, otherwise fall back to
   // the agent's own persisted preference (set via the Month/Week toggle).
@@ -64,76 +100,112 @@ export default async function TimesheetPage({
     params.view === "day"
       ? "day"
       : params.view === "week"
-      ? "week"
-      : params.view === "month"
-      ? "month"
-      : viewing.timesheet_view;
+        ? "week"
+        : params.view === "month"
+          ? "month"
+          : viewing.timesheet_view;
 
-  // "Today" is the viewed agent's local date (their timezone, set by an
-  // admin on the Team page), so the default month/week roll over at their
-  // midnight rather than the server's. No timezone set = server date, as before.
-  const today = todayIn(viewing.timezone);
+  // The grid is drawn on the viewed agent's own clock (their timezone, set by
+  // an admin on the Team page; UK if none): that's what they type and see. The
+  // database stores UK time and converts both ways. An admin can switch the
+  // grid to UK time with ?tz=uk. "Today" and the default month/week follow
+  // whichever clock is showing.
+  const agentZone = zoneOf(viewing.timezone);
+  const zoneMode: "local" | "uk" =
+    me.role === "admin" && params.tz === "uk" ? "uk" : "local";
+  const zone = zoneMode === "uk" ? UK_ZONE : agentZone;
+  const today = todayIn(zone);
   const month = params.month || today.slice(0, 7);
   const [y, m] = month.split("-").map(Number);
   const monthStart = `${month}-01`;
   const monthEnd = `${month}-${pad2(new Date(y, m, 0).getDate())}`;
 
-  const weekStart = params.week || dkey(mondayOf(new Date(`${today}T00:00:00`)));
+  const weekStart =
+    params.week || dkey(mondayOf(new Date(`${today}T00:00:00`)));
   const weekEnd = addDaysStr(weekStart, 6);
 
-  const day = params.day && /^\d{4}-\d{2}-\d{2}$/.test(params.day) ? params.day : today;
+  const day =
+    params.day && /^\d{4}-\d{2}-\d{2}$/.test(params.day) ? params.day : today;
 
   // The visible grid range: the whole calendar month, or just the 7 days of
   // the active week (which may straddle two months) - only this range's
   // entries need to be fetched, not the whole month regardless of view.
-  const rangeStart = view === "day" ? day : view === "week" ? weekStart : monthStart;
+  const rangeStart =
+    view === "day" ? day : view === "week" ? weekStart : monthStart;
   const rangeEnd = view === "day" ? day : view === "week" ? weekEnd : monthEnd;
 
   // Leads are tracked per calendar month (not per week - there's no weekly
   // lead-tracking concept in the data model), so in Week view they're scoped
   // to the month containing the visible week's first day.
-  const leadsPeriod = view === "day" ? day.slice(0, 7) : view === "week" ? weekStart.slice(0, 7) : month;
+  const leadsPeriod =
+    view === "day"
+      ? day.slice(0, 7)
+      : view === "week"
+        ? weekStart.slice(0, 7)
+        : month;
 
-  const [entries, { data: leads }, { data: leadTypes }, { data: statusRows }] = await Promise.all([
+  const [entries, { data: leads }, { data: leadTypes }] = await Promise.all([
     // Paged: a month on a 24-hour schedule is up to 1488 slots, over the
     // API's 1000-row cap.
+    // entries_local returns each entry's date/slot on the grid's clock.
     fetchAll<TimesheetEntry>(
       (from, to) =>
         supabase
-          .from("timesheet_entries")
-          .select("*")
-          .eq("agent_id", viewingId)
-          .gte("entry_date", rangeStart)
-          .lte("entry_date", rangeEnd)
-          .order("entry_date")
-          .order("slot")
-          .range(from, to) as unknown as PromiseLike<{ data: TimesheetEntry[] | null; error: { message: string } | null }>
+          .rpc("entries_local", {
+            p_agent: viewingId,
+            p_from: rangeStart,
+            p_to: rangeEnd,
+            p_tz: zone,
+          })
+          .order("starts_at")
+          .range(from, to) as unknown as PromiseLike<{
+          data: TimesheetEntry[] | null;
+          error: { message: string } | null;
+        }>,
     ),
-    supabase.from("leads").select("*").eq("agent_id", viewingId).eq("period", leadsPeriod),
+    supabase
+      .from("leads")
+      .select("*")
+      .eq("agent_id", viewingId)
+      .eq("period", leadsPeriod),
     supabase.from("lead_types").select("*").order("name"),
-    // Open allocations (hours-remaining) with their figures. If the function
-    // doesn't exist yet (migration 0009 not run) this just errors to null and
-    // the page works without the countdown.
-    supabase.rpc("allocation_status", { p_agent: viewingId, p_today: today, p_include_closed: false }),
   ]);
-  const allocStatus = mapStatusRows(statusRows).filter((a) => assignedProjectIds.has(a.projectId));
+  // "Hours changed" notice: only on an agent's own timesheet, only while their
+  // flag is unacknowledged. If the Assign Hours tables aren't installed yet this
+  // simply returns nothing.
+  let hoursChangedAt: string | null = null;
+  if (me.role === "agent" && viewing.id === me.id) {
+    const { data: flag } = await supabase
+      .from("hours_flags")
+      .select("changed_at, seen_at")
+      .eq("agent_id", me.id)
+      .maybeSingle();
+    if (flag && !flag.seen_at) hoursChangedAt = flag.changed_at as string;
+  }
 
   return (
-    <TimesheetGrid
-      key={viewing.id}
-      me={me}
-      viewing={viewing}
-      agents={(allAgents as Agent[]) ?? []}
-      view={view}
-      month={month}
-      weekStart={weekStart}
-      day={day}
-      allocStatus={allocStatus}
-      today={today}
-      projects={myProjects}
-      entries={entries}
-      leads={(leads as Lead[]) ?? []}
-      leadTypes={(leadTypes as LeadType[]) ?? []}
-    />
+    <>
+      {hoursChangedAt && (
+        <HoursChangedBanner key={hoursChangedAt} changedAt={hoursChangedAt} />
+      )}
+      <TimesheetGrid
+        key={viewing.id}
+        me={me}
+        viewing={viewing}
+        agents={(allAgents as Agent[]) ?? []}
+        view={view}
+        month={month}
+        weekStart={weekStart}
+        day={day}
+        zone={zone}
+        zoneMode={zoneMode}
+        agentZone={agentZone}
+        projects={myProjects}
+        historyProjects={historyProjects}
+        entries={entries}
+        leads={(leads as Lead[]) ?? []}
+        leadTypes={(leadTypes as LeadType[]) ?? []}
+      />
+    </>
   );
 }

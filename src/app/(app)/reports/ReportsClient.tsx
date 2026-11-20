@@ -190,6 +190,7 @@ export default function ReportsClient({
     <div>
       <div className="flex items-baseline justify-between mb-4 flex-wrap gap-2">
         <h2 className="text-[19px] font-semibold">Reports</h2>
+        <span className="text-[12px] text-[#898781]">Dates and times are UK time</span>
       </div>
 
       <div className="flex items-end gap-2.5 flex-wrap bg-[#fcfcfb] border border-[#e1e0d9] rounded-lg p-3 mb-4">

@@ -52,6 +52,23 @@ Total hands-on time: roughly 30–45 minutes.
    - `supabase/migrations/0010_hours_aggregates.sql` — database-side hour
      totals so the Overview, Agents, Projects and Reports pages stay correct
      past the API's 1,000-row limit. Functions only; run **before** deploying.
+   - `supabase/migrations/0011_unassign_keeps_hours.sql` — unassigning an agent
+     keeps their logged hours: a guard trigger stops non-admins editing hours on
+     projects they're no longer assigned to, plus a per-project/agent hours
+     aggregate for the admin campaign table. No data changes. Run **before**
+     deploying.
+   - `supabase/migrations/0012_uk_time_storage.sql` — hours are stored in UK
+     time (BST/GMT handled automatically) while agents type and see their own
+     local time. Set every agent's timezone on the Team page **first**, then run
+     this **before** deploying: existing hours (typed in each agent's own time)
+     are converted once, with a backup in `timesheet_entries_pre_uk`. Agents with
+     no timezone are treated as UK. After it, re-run
+     `supabase/reporting_views_utc.sql` if the `reporting` schema exists.
+   - `supabase/migrations/0013_assign_hours.sql` — Assign Hours: per-campaign
+     week schedules, weekly hours per agent, admin-only cell colours, and the
+     "hours changed" flag for agents. New tables only; logged hours and the old
+     allocation tables are untouched (the old allocation feature is removed from
+     the app, its data is kept). Run **before** deploying.
    - *(Optional, only if the read-only `reporting` schema exists)*
      `supabase/reporting_views_utc.sql` — adds `timezone`, `agent_timezone`
      and `starts_at_utc` to the reporting views.

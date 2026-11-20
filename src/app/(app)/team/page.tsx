@@ -3,10 +3,11 @@ import { requireAdmin } from "@/lib/data";
 import type { Agent, Project, ProjectAgent } from "@/lib/types";
 import { hoursByAgent as aggHoursByAgent, agentIdsWithHours as agentIdsWithHoursFn } from "@/lib/aggregates";
 import TeamTable from "./TeamTable";
+import { UK_ZONE, todayIn } from "@/lib/timezones";
 
+// Hours are stored in UK time, so "this month" is the UK month.
 function currentYm() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  return todayIn(UK_ZONE).slice(0, 7);
 }
 
 export default async function TeamPage() {

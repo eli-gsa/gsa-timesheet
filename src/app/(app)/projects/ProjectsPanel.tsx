@@ -14,10 +14,7 @@ import {
 import Modal, { ListRow, ModalButton, RoleBadge } from "@/components/Modal";
 import { useRowHighlight } from "@/components/useRowHighlight";
 import { useBusyTransition } from "@/components/BusyOverlay";
-import AllocationsModal from "./AllocationsModal";
 import AgentPicker from "./AgentPicker";
-import AllocationTable from "./AllocationTable";
-import type { AllocStatus } from "@/lib/allocation";
 
 const DEFAULT_PALETTE = ["#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948", "#2a78d6"];
 
@@ -26,13 +23,11 @@ export default function ProjectsPanel({
   agents,
   assignments,
   projectIdsWithHours,
-  allocStatus,
 }: {
   projects: Project[];
   agents: Agent[];
   assignments: ProjectAgent[];
   projectIdsWithHours: string[];
-  allocStatus: AllocStatus[];
 }) {
   const router = useRouter();
   useRowHighlight("data-proj-row");
@@ -222,7 +217,6 @@ export default function ProjectsPanel({
                           project={p}
                           agents={agents}
                           assignments={assignments.filter((a) => a.project_id === p.id)}
-                          allocStatus={allocStatus.filter((a) => a.projectId === p.id)}
                           onChanged={refresh}
                         />
                       </td>
@@ -281,17 +275,14 @@ function ProjectEditForm({
   project,
   agents,
   assignments,
-  allocStatus,
   onChanged,
 }: {
   project: Project;
   agents: Agent[];
   assignments: ProjectAgent[];
-  allocStatus: AllocStatus[];
   onChanged: () => void;
 }) {
   const [isPending, startTransition] = useBusyTransition();
-  const [allocFor, setAllocFor] = useState<Agent | null>(null);
   const [name, setName] = useState(project.name);
   const [color, setColor] = useState(project.color);
   const assignedIds = new Set(assignments.map((a) => a.agent_id));
@@ -351,32 +342,6 @@ function ProjectEditForm({
           }
         />
       </div>
-      {assignments.length > 0 && (
-        <div>
-          <h4 className="text-[12.5px] font-semibold mb-0.5">Hours allocated</h4>
-          <p className="text-[11.5px] text-[#898781] mb-1.5">
-            Tick agents to give several the same hours at once, or use Manage… for one agent: top-ups, counting
-            window, close/renew and weekly/monthly caps. Agents see the hours left on their timesheet.
-          </p>
-          <AllocationTable
-            projectId={project.id}
-            agents={agents.filter((a) => assignedIds.has(a.id))}
-            allocStatus={allocStatus}
-            onManage={setAllocFor}
-            onChanged={onChanged}
-          />
-        </div>
-      )}
-      {allocFor && (
-        <AllocationsModal
-          projectId={project.id}
-          projectName={project.name}
-          agentId={allocFor.id}
-          agentName={allocFor.name}
-          onClose={() => setAllocFor(null)}
-          onChanged={onChanged}
-        />
-      )}
     </div>
   );
 }

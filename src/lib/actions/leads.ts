@@ -4,22 +4,27 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentAgent } from "@/lib/data";
 import { logAudit } from "@/lib/audit";
+import { isDateStr } from "@/lib/hours";
 
 export async function addLead(
   agentId: string,
   projectId: string,
   period: string,
   name: string,
-  type: string
+  type: string,
+  leadDate?: string
 ) {
   const me = await getCurrentAgent();
   if (!me) throw new Error("Not signed in");
   if (me.id !== agentId && me.role !== "admin") throw new Error("Not allowed");
+  if (leadDate !== undefined && !isDateStr(leadDate)) throw new Error("Enter a valid date");
 
   const supabase = await createClient();
-  const { error } = await supabase
-    .from("leads")
-    .insert({ agent_id: agentId, project_id: projectId, period, name, type });
+  // lead_date defaults to today (UK) in the database; the database also keeps
+  // it inside the lead's month.
+  const row: Record<string, unknown> = { agent_id: agentId, project_id: projectId, period, name, type };
+  if (leadDate) row.lead_date = leadDate;
+  const { error } = await supabase.from("leads").insert(row);
   if (error) throw new Error(error.message);
 
   await logAudit(supabase, {
@@ -33,9 +38,10 @@ export async function addLead(
   revalidatePath("/timesheet");
 }
 
-export async function updateLead(leadId: string, name: string, type: string) {
+export async function updateLead(leadId: string, name: string, type: string, leadDate?: string) {
   const me = await getCurrentAgent();
   if (!me) throw new Error("Not signed in");
+  if (leadDate !== undefined && !isDateStr(leadDate)) throw new Error("Enter a valid date");
 
   const supabase = await createClient();
   const { data: existing } = await supabase
@@ -48,9 +54,20 @@ export async function updateLead(leadId: string, name: string, type: string) {
 
   const { error } = await supabase
     .from("leads")
-    .update({ name, type, updated_at: new Date().toISOString() })
+    .update({ name, type, ...(leadDate ? { lead_date: leadDate } : {}), updated_at: new Date().toISOString() })
     .eq("id", leadId);
   if (error) throw new Error(error.message);
+
+  if (leadDate && existing.lead_date && existing.lead_date !== leadDate) {
+    await logAudit(supabase, {
+      actorId: me.id,
+      agentId: existing.agent_id,
+      projectId: existing.project_id,
+      field: "lead_date",
+      oldValue: `${existing.name}: ${existing.lead_date}`,
+      newValue: `${name}: ${leadDate}`,
+    });
+  }
 
   await logAudit(supabase, {
     actorId: me.id,

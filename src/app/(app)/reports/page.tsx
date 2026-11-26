@@ -4,6 +4,10 @@ import type { Agent, Project, TimesheetEntry } from "@/lib/types";
 import ReportsClient from "./ReportsClient";
 import { fetchAll } from "@/lib/aggregates";
 import { UK_ZONE, todayIn } from "@/lib/timezones";
+import { loadGroups } from "@/lib/hoursData";
+import { parseTokens, resolveSelection } from "@/lib/groups";
+
+const NIL_UUID = "00000000-0000-0000-0000-000000000000";
 
 // Reports are in UK time: default range = this UK month so far.
 function defaultFrom() {
@@ -16,7 +20,7 @@ function defaultTo() {
 export default async function ReportsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ from?: string; to?: string; agent?: string; project?: string }>;
+  searchParams: Promise<{ from?: string; to?: string; agent?: string; project?: string; sel?: string }>;
 }) {
   await requireAdmin();
   const params = await searchParams;
@@ -24,6 +28,12 @@ export default async function ReportsPage({
   const to = params.to || defaultTo();
 
   const supabase = await createClient();
+
+  // Campaign selection: groups and/or single campaigns (empty = all campaigns).
+  // The old single-campaign "project" link still works.
+  const groups = await loadGroups(supabase);
+  const tokens = parseTokens(params.sel ?? (params.project && params.project !== "all" ? `p:${params.project}` : ""));
+  const scoped = tokens.length > 0 ? resolveSelection(tokens, groups) : null;
 
   // Read in pages of 1000: the API caps one request at 1000 rows, and a busy
   // date range has many more entries than that. The order is a unique key so
@@ -39,7 +49,7 @@ export default async function ReportsPage({
       .order("slot")
       .range(rangeFrom, rangeTo);
     if (params.agent && params.agent !== "all") q = q.eq("agent_id", params.agent);
-    if (params.project && params.project !== "all") q = q.eq("project_id", params.project);
+    if (scoped) q = q.in("project_id", scoped.length ? scoped : [NIL_UUID]);
     return q as unknown as PromiseLike<{ data: TimesheetEntry[] | null; error: { message: string } | null }>;
   });
 
@@ -57,7 +67,8 @@ export default async function ReportsPage({
       from={from}
       to={to}
       agentFilter={params.agent || "all"}
-      projectFilter={params.project || "all"}
+      groups={groups}
+      selection={tokens}
     />
   );
 }

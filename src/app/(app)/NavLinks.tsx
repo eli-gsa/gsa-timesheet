@@ -8,7 +8,7 @@ const ADMIN_LINKS = [
   { href: "/", label: "Overview" },
   { href: "/team", label: "Agents" },
   { href: "/projects", label: "Projects" },
-  { href: "/assign-hours", label: "Assign Hours" },
+  { href: "/assign-hours", label: "Assign Hours and Lead Bonuses" },
   { href: "/reports", label: "Reports" },
   { href: "/invoicing", label: "Invoicing" },
   { href: "/audit", label: "Audit log" },
@@ -19,7 +19,7 @@ const SUMMARY_LINK = { href: "/summary", label: "My Summary" };
 const AGENT_LINKS = [
   { href: "/timesheet", label: "My Timesheet" },
   SUMMARY_LINK,
-  { href: "/assigned-hours", label: "Assigned Hours" },
+  { href: "/assigned-hours", label: "Schedule and Lead Summary" },
 ];
 
 export default function NavLinks({ role }: { role: Role }) {
@@ -61,7 +61,7 @@ export default function NavLinks({ role }: { role: Role }) {
               : "text-[#52514e] hover:bg-[#f3f2ee] hover:text-[#0b0b0b]"
           }`}
         >
-          Assigned Hours
+          Schedule and Lead Summary
         </Link>
       )}
       {links.map((l) => (

@@ -59,6 +59,8 @@ export interface Lead {
   period: string; // YYYY-MM
   name: string;
   type: string;
+  // The day the lead was logged (UK date); always inside `period`. Migration 0015.
+  lead_date?: string;
   created_at: string;
   updated_at: string;
 }

@@ -23,11 +23,13 @@ export default function ProjectsPanel({
   agents,
   assignments,
   projectIdsWithHours,
+  groups,
 }: {
   projects: Project[];
   agents: Agent[];
   assignments: ProjectAgent[];
   projectIdsWithHours: string[];
+  groups?: React.ReactNode;
 }) {
   const router = useRouter();
   useRowHighlight("data-proj-row");
@@ -82,6 +84,8 @@ export default function ProjectsPanel({
           {showAdd ? "Cancel" : "+ Add project"}
         </button>
       </div>
+
+      {groups}
 
       {showAdd && (
         <div className="border border-[#e1e0d9] rounded-lg p-3.5 mb-4 bg-[#f3f2ee] flex items-end gap-2.5 flex-wrap">

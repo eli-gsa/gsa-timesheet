@@ -1,14 +1,148 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Agent, Project, TimesheetEntry } from "@/lib/types";
 import { fmtHours } from "@/lib/types";
 import { BarChartH, ChartLegend, LineChartMulti } from "@/components/charts";
+import SearchMultiSelect from "@/components/SearchMultiSelect";
+import { resolveSelection, type GroupLite } from "@/lib/groups";
+
+const COMBINED = "combined";
 
 function monthLabel(ym: string) {
   const [y, m] = ym.split("-").map(Number);
   return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+}
+
+function compute(
+  entries: TimesheetEntry[],
+  projectsTouchedCount: number,
+  agentById: Map<string, Agent>,
+  projectById: Map<string, Project>,
+  from: string,
+  to: string
+) {
+  const totalHours = entries.length * 0.5;
+  const daysSet = new Set(entries.map((e) => e.entry_date));
+  const projSet = new Set(entries.map((e) => e.project_id));
+  const personSet = new Set(entries.map((e) => e.agent_id));
+  const avgPerDay = daysSet.size ? totalHours / daysSet.size : 0;
+
+  const byProj = new Map<string, number>();
+  entries.forEach((e) => byProj.set(e.project_id, (byProj.get(e.project_id) ?? 0) + 0.5));
+  const byProjData = Array.from(byProj.entries())
+    .map(([pid, value]) => {
+      const p = projectById.get(pid);
+      return { id: pid, label: p?.name ?? pid, value, color: p?.color ?? "#2a78d6" };
+    })
+    .sort((a, b) => b.value - a.value);
+
+  const byPerson = new Map<string, number>();
+  entries.forEach((e) => byPerson.set(e.agent_id, (byPerson.get(e.agent_id) ?? 0) + 0.5));
+  const byPersonData = Array.from(byPerson.entries())
+    .map(([uid, value]) => {
+      const u = agentById.get(uid);
+      return { label: u?.name ?? uid, value, color: "#2a78d6" };
+    })
+    .sort((a, b) => b.value - a.value);
+
+  const persons = Array.from(personSet)
+    .map((id) => agentById.get(id))
+    .filter((a): a is Agent => !!a)
+    .sort((a, b) => (a.name < b.name ? -1 : 1));
+  const projs = Array.from(projSet)
+    .map((id) => projectById.get(id))
+    .filter((p): p is Project => !!p);
+  const pivot = new Map<string, number>();
+  entries.forEach((e) => {
+    const k = `${e.agent_id}|${e.project_id}`;
+    pivot.set(k, (pivot.get(k) ?? 0) + 0.5);
+  });
+
+  // trend bucketing: day / week / month depending on the span
+  const fromDt = new Date(`${from}T00:00:00`);
+  const toDt = new Date(`${to}T00:00:00`);
+  const spanDays = Math.max(1, Math.round((toDt.getTime() - fromDt.getTime()) / 86400000));
+  const bucket: "day" | "week" | "month" = spanDays <= 45 ? "day" : spanDays <= 210 ? "week" : "month";
+  function bucketKeyFor(dateStr: string) {
+    if (bucket === "day") return dateStr;
+    if (bucket === "week") {
+      const d = new Date(`${dateStr}T00:00:00`);
+      const day = (d.getDay() + 6) % 7;
+      const monday = new Date(d);
+      monday.setDate(d.getDate() - day);
+      return monday.toISOString().slice(0, 10);
+    }
+    return dateStr.slice(0, 7);
+  }
+  const seenB = new Set<string>();
+  const buckets: string[] = [];
+  entries
+    .slice()
+    .sort((a, b) => (a.entry_date < b.entry_date ? -1 : 1))
+    .forEach((e) => {
+      const bk = bucketKeyFor(e.entry_date);
+      if (!seenB.has(bk)) {
+        seenB.add(bk);
+        buckets.push(bk);
+      }
+    });
+  buckets.sort();
+  const bucketLabels = buckets.map((bk) => {
+    if (bucket === "month") return monthLabel(bk).split(" ")[0] + " " + bk.slice(2, 4);
+    const d = new Date(`${bk}T00:00:00`);
+    return d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  });
+  const topProjects = byProjData.slice(0, 7);
+  const trendSeries = topProjects.map((tp) => ({
+    name: tp.label,
+    color: tp.color,
+    values: buckets.map((bk) => {
+      let sum = 0;
+      entries.forEach((e) => {
+        if (e.project_id === tp.id && bucketKeyFor(e.entry_date) === bk) sum += 0.5;
+      });
+      return sum;
+    }),
+  }));
+
+  // monthly breakdown - always by calendar month regardless of the trend bucket
+  const byMonth = new Map<string, Map<string, number>>();
+  entries.forEach((e) => {
+    const mk = e.entry_date.slice(0, 7);
+    if (!byMonth.has(mk)) byMonth.set(mk, new Map());
+    const m = byMonth.get(mk)!;
+    m.set(e.project_id, (m.get(e.project_id) ?? 0) + 0.5);
+  });
+  const monthKeys = Array.from(byMonth.keys()).sort();
+  const monthly = monthKeys.map((mk) => {
+    const m = byMonth.get(mk)!;
+    const monthEntries = Array.from(m.entries())
+      .map(([pid, hours]) => {
+        const p = projectById.get(pid);
+        return { name: p?.name ?? pid, hours, color: p?.color ?? "#2a78d6" };
+      })
+      .sort((a, b) => b.hours - a.hours);
+    const total = monthEntries.reduce((a, b) => a + b.hours, 0);
+    return { month: mk, entries: monthEntries, total };
+  });
+
+  return {
+    totalHours,
+    daysWorked: daysSet.size,
+    avgPerDay,
+    projectsTouched: projectsTouchedCount,
+    byProjData,
+    byPersonData,
+    persons,
+    projs,
+    pivot,
+    bucket,
+    bucketLabels,
+    trendSeries,
+    monthly,
+  };
 }
 
 export default function ReportsClient({
@@ -18,7 +152,8 @@ export default function ReportsClient({
   from,
   to,
   agentFilter,
-  projectFilter,
+  groups,
+  selection,
 }: {
   entries: TimesheetEntry[];
   agents: Agent[];
@@ -26,138 +161,60 @@ export default function ReportsClient({
   from: string;
   to: string;
   agentFilter: string;
-  projectFilter: string;
+  groups: GroupLite[];
+  selection: string[]; // applied tokens ("g:<id>" / "p:<id>"); empty = all campaigns
 }) {
   const router = useRouter();
+  const [view, setView] = useState<"segmented" | "combined">("segmented");
+  const [pending, setPending] = useState<string[]>(selection);
   const agentById = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
-  const projectById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects]);
+
+  // Combined view folds every selected campaign into one series, named after the
+  // group when exactly one group (and nothing else) is selected.
+  const combinedName = useMemo(() => {
+    if (selection.length === 0) return "All campaigns (combined)";
+    if (selection.length === 1 && selection[0].startsWith("g:")) {
+      return `${groups.find((g) => g.id === selection[0].slice(2))?.name ?? "Group"} (combined)`;
+    }
+    return `Combined (${resolveSelection(selection, groups).length} campaigns)`;
+  }, [selection, groups]);
+  const projectById = useMemo(() => {
+    const m = new Map(projects.map((p) => [p.id, p]));
+    if (view === "combined") m.set(COMBINED, { id: COMBINED, name: combinedName, color: "#2a78d6" } as Project);
+    return m;
+  }, [projects, view, combinedName]);
+
+  const selOptions = useMemo(
+    () => [
+      ...groups.map((g) => ({
+        id: `g:${g.id}`,
+        label: g.name,
+        hint: `${g.projectIds.length} campaign${g.projectIds.length === 1 ? "" : "s"}`,
+        group: "Groups",
+      })),
+      ...projects.map((p) => ({ id: `p:${p.id}`, label: p.name, hint: p.active ? undefined : "archived", group: "Campaigns" })),
+    ],
+    [groups, projects]
+  );
+  const dirty = pending.length !== selection.length || pending.some((t) => !selection.includes(t));
 
   const computed = useMemo(() => {
-    const totalHours = entries.length * 0.5;
-    const daysSet = new Set(entries.map((e) => e.entry_date));
-    const projSet = new Set(entries.map((e) => e.project_id));
-    const personSet = new Set(entries.map((e) => e.agent_id));
-    const avgPerDay = daysSet.size ? totalHours / daysSet.size : 0;
-
-    const byProj = new Map<string, number>();
-    entries.forEach((e) => byProj.set(e.project_id, (byProj.get(e.project_id) ?? 0) + 0.5));
-    const byProjData = Array.from(byProj.entries())
-      .map(([pid, value]) => {
-        const p = projectById.get(pid);
-        return { id: pid, label: p?.name ?? pid, value, color: p?.color ?? "#2a78d6" };
-      })
-      .sort((a, b) => b.value - a.value);
-
-    const byPerson = new Map<string, number>();
-    entries.forEach((e) => byPerson.set(e.agent_id, (byPerson.get(e.agent_id) ?? 0) + 0.5));
-    const byPersonData = Array.from(byPerson.entries())
-      .map(([uid, value]) => {
-        const u = agentById.get(uid);
-        return { label: u?.name ?? uid, value, color: "#2a78d6" };
-      })
-      .sort((a, b) => b.value - a.value);
-
-    const persons = Array.from(personSet)
-      .map((id) => agentById.get(id))
-      .filter((a): a is Agent => !!a)
-      .sort((a, b) => (a.name < b.name ? -1 : 1));
-    const projs = Array.from(projSet)
-      .map((id) => projectById.get(id))
-      .filter((p): p is Project => !!p);
-    const pivot = new Map<string, number>();
-    entries.forEach((e) => {
-      const k = `${e.agent_id}|${e.project_id}`;
-      pivot.set(k, (pivot.get(k) ?? 0) + 0.5);
-    });
-
-    // trend bucketing: day / week / month depending on the span
-    const fromDt = new Date(`${from}T00:00:00`);
-    const toDt = new Date(`${to}T00:00:00`);
-    const spanDays = Math.max(1, Math.round((toDt.getTime() - fromDt.getTime()) / 86400000));
-    const bucket: "day" | "week" | "month" = spanDays <= 45 ? "day" : spanDays <= 210 ? "week" : "month";
-    function bucketKeyFor(dateStr: string) {
-      if (bucket === "day") return dateStr;
-      if (bucket === "week") {
-        const d = new Date(`${dateStr}T00:00:00`);
-        const day = (d.getDay() + 6) % 7;
-        const monday = new Date(d);
-        monday.setDate(d.getDate() - day);
-        return monday.toISOString().slice(0, 10);
-      }
-      return dateStr.slice(0, 7);
-    }
-    const seenB = new Set<string>();
-    const buckets: string[] = [];
-    entries
-      .slice()
-      .sort((a, b) => (a.entry_date < b.entry_date ? -1 : 1))
-      .forEach((e) => {
-        const bk = bucketKeyFor(e.entry_date);
-        if (!seenB.has(bk)) {
-          seenB.add(bk);
-          buckets.push(bk);
-        }
-      });
-    buckets.sort();
-    const bucketLabels = buckets.map((bk) => {
-      if (bucket === "month") return monthLabel(bk).split(" ")[0] + " " + bk.slice(2, 4);
-      const d = new Date(`${bk}T00:00:00`);
-      return d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
-    });
-    const topProjects = byProjData.slice(0, 7);
-    const trendSeries = topProjects.map((tp) => ({
-      name: tp.label,
-      color: tp.color,
-      values: buckets.map((bk) => {
-        let sum = 0;
-        entries.forEach((e) => {
-          if (e.project_id === tp.id && bucketKeyFor(e.entry_date) === bk) sum += 0.5;
-        });
-        return sum;
-      }),
-    }));
-
-    // monthly breakdown - always by calendar month regardless of the trend bucket
-    const byMonth = new Map<string, Map<string, number>>();
-    entries.forEach((e) => {
-      const mk = e.entry_date.slice(0, 7);
-      if (!byMonth.has(mk)) byMonth.set(mk, new Map());
-      const m = byMonth.get(mk)!;
-      m.set(e.project_id, (m.get(e.project_id) ?? 0) + 0.5);
-    });
-    const monthKeys = Array.from(byMonth.keys()).sort();
-    const monthly = monthKeys.map((mk) => {
-      const m = byMonth.get(mk)!;
-      const monthEntries = Array.from(m.entries())
-        .map(([pid, hours]) => {
-          const p = projectById.get(pid);
-          return { name: p?.name ?? pid, hours, color: p?.color ?? "#2a78d6" };
-        })
-        .sort((a, b) => b.hours - a.hours);
-      const total = monthEntries.reduce((a, b) => a + b.hours, 0);
-      return { month: mk, entries: monthEntries, total };
-    });
-
-    return {
-      totalHours,
-      daysWorked: daysSet.size,
-      avgPerDay,
-      projectsTouched: projSet.size,
-      byProjData,
-      byPersonData,
-      persons,
-      projs,
-      pivot,
-      bucket,
-      bucketLabels,
-      trendSeries,
-      monthly,
-    };
-  }, [entries, agentById, projectById, from, to]);
+    const projectsTouchedCount = new Set(entries.map((e) => e.project_id)).size;
+    const rawEntries = entries;
+    const effective = view === "combined" ? rawEntries.map((e) => ({ ...e, project_id: COMBINED })) : rawEntries;
+    return compute(effective, projectsTouchedCount, agentById, projectById, from, to);
+  }, [entries, view, agentById, projectById, from, to]);
 
   function setParam(key: string, value: string) {
-    const sp = new URLSearchParams({ from, to, agent: agentFilter, project: projectFilter });
+    const sp = new URLSearchParams({ from, to, agent: agentFilter });
+    if (selection.length) sp.set("sel", selection.join(","));
     sp.set(key, value);
+    router.push(`/reports?${sp.toString()}`);
+  }
+
+  function applySelection() {
+    const sp = new URLSearchParams({ from, to, agent: agentFilter });
+    if (pending.length) sp.set("sel", pending.join(","));
     router.push(`/reports?${sp.toString()}`);
   }
 
@@ -227,21 +284,41 @@ export default function ReportsClient({
             ))}
           </select>
         </label>
-        <label className="flex flex-col gap-1 text-[12px] text-[#52514e]">
-          Project
-          <select
-            defaultValue={projectFilter}
-            className="rounded-md border border-[#c3c2b7] px-2 py-1.5 text-[13px]"
-            onChange={(e) => setParam("project", e.target.value)}
-          >
-            <option value="all">All projects</option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
+        <div className="flex flex-col gap-1 text-[12px] text-[#52514e]">
+          Campaigns / groups
+          <div className="flex items-center gap-2">
+            <SearchMultiSelect
+              width={280}
+              options={selOptions}
+              selected={pending}
+              onChange={setPending}
+              placeholder="All campaigns"
+              allLabel="groups & campaigns"
+            />
+            {dirty && (
+              <button
+                onClick={applySelection}
+                className="rounded-md bg-[#2a78d6] text-white px-3 py-1.5 text-[12.5px] font-semibold"
+              >
+                Apply
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="flex flex-col gap-1 text-[12px] text-[#52514e]">
+          View
+          <div className="inline-flex rounded-md border border-[#c3c2b7] bg-white p-0.5 text-[12.5px]">
+            {(["segmented", "combined"] as const).map((v) => (
+              <button
+                key={v}
+                onClick={() => setView(v)}
+                className={`rounded px-2.5 py-1 capitalize ${view === v ? "bg-[#2a78d6] text-white font-semibold" : "text-[#52514e] hover:bg-[#f3f2ee]"}`}
+              >
+                {v}
+              </button>
             ))}
-          </select>
-        </label>
+          </div>
+        </div>
         <button
           className="rounded-md border border-[#c3c2b7] bg-white px-3 py-1.5 text-[13px] font-semibold ml-auto"
           onClick={exportCsv}

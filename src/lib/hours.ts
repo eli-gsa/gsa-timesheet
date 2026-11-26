@@ -27,6 +27,19 @@ export interface HourLogged {
 
 export const halfToHours = (half: number) => half / 2;
 
+// Lead bonus: bonus per lead for one agent in one week (positive amounts only;
+// no row = no bonus), and the number of leads counted in that week.
+export interface LeadRate {
+  week_id: string;
+  agent_id: string;
+  amount: number;
+}
+export interface LeadCount {
+  week_id: string;
+  agent_id: string;
+  leads: number;
+}
+
 export const cellKey = (weekId: string, agentId: string) => `${weekId}|${agentId}`;
 
 // Admin brush colours (stored by name so the palette can be restyled freely).

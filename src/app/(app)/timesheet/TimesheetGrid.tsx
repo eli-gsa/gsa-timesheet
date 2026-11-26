@@ -1084,19 +1084,26 @@ function LeadsModal({
   const [isPending, startTransition] = useBusyTransition();
   const [newName, setNewName] = useState("");
   const [newType, setNewType] = useState(leadTypes[0]?.name ?? "");
+  // New leads are dated today (UK) when that is inside the month being viewed,
+  // else the nearest day of that month. The agent can change it; it always stays
+  // within the month (the database enforces this too).
+  const first = `${month}-01`;
+  const last = `${month}-${String(new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate()).padStart(2, "0")}`;
+  const todayUk = todayIn(UK_ZONE);
+  const [newDate, setNewDate] = useState(todayUk < first ? first : todayUk > last ? last : todayUk);
   const projectLeads = leads.filter((l) => l.project_id === project.id);
 
   function handleAdd() {
     if (!newName.trim()) return;
     startTransition(async () => {
-      await addLead(agentId, project.id, month, newName.trim(), newType);
+      await addLead(agentId, project.id, month, newName.trim(), newType, newDate);
       setNewName("");
       router.refresh();
     });
   }
-  function handleUpdate(leadId: string, name: string, type: string) {
+  function handleUpdate(leadId: string, name: string, type: string, date?: string) {
     startTransition(async () => {
-      await updateLead(leadId, name, type);
+      await updateLead(leadId, name, type, date);
       router.refresh();
     });
   }
@@ -1110,7 +1117,7 @@ function LeadsModal({
   return (
     <div className="fixed inset-0 bg-black/35 flex items-start justify-center z-50 pt-16 px-4" onClick={onClose}>
       <div
-        className="relative bg-[#fcfcfb] border border-[#c3c2b7] rounded-xl p-4.5 max-w-[440px] w-full max-h-[80vh] overflow-y-auto"
+        className="relative bg-[#fcfcfb] border border-[#c3c2b7] rounded-xl p-4.5 max-w-[560px] w-full max-h-[80vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <button className="absolute top-2.5 right-2.5 w-7 h-7 text-[#898781]" onClick={onClose}>
@@ -1146,6 +1153,18 @@ function LeadsModal({
                 defaultValue={l.name}
                 disabled={!canEdit}
                 onBlur={(e) => e.target.value !== l.name && handleUpdate(l.id, e.target.value, l.type)}
+              />
+              <input
+                type="date"
+                className="border-none bg-transparent text-[12px] text-[#898781] w-[112px]"
+                defaultValue={l.lead_date ?? ""}
+                min={first}
+                max={last}
+                disabled={!canEdit}
+                title="Date the lead was logged"
+                onBlur={(e) =>
+                  e.target.value && e.target.value !== l.lead_date && handleUpdate(l.id, l.name, l.type, e.target.value)
+                }
               />
               <select
                 className="border-none bg-transparent text-[12px] text-[#898781]"
@@ -1192,6 +1211,17 @@ function LeadsModal({
                   </option>
                 ))}
               </select>
+            </label>
+            <label className="flex flex-col gap-1 text-[12px] text-[#52514e]">
+              Date
+              <input
+                type="date"
+                className="rounded-md border border-[#c3c2b7] px-2 py-1 text-[13px]"
+                value={newDate}
+                min={first}
+                max={last}
+                onChange={(e) => e.target.value && setNewDate(e.target.value)}
+              />
             </label>
             <button
               className="rounded-md bg-[#2a78d6] text-white px-3 py-1.5 text-[13px] font-semibold"

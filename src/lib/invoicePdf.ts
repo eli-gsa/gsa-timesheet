@@ -29,7 +29,7 @@ const RULE = rgb(0.82, 0.81, 0.78);
 // Standard PDF fonts only cover Latin-1; anything outside it (or a stray
 // control character) would make drawText throw. Fold accents to plain
 // letters first ("Zoë" -> "Zoe"), then replace whatever is left.
-function safe(s: string): string {
+export function safe(s: string): string {
   const folded = s
     .replace(/[\u2013\u2014\u2212]/g, "-") // en/em dash, minus
     .replace(/[\u2018\u2019\u201B]/g, "'")
@@ -39,7 +39,7 @@ function safe(s: string): string {
   return folded.replace(/[^\x20-\x7E¡-ÿ]/g, "?");
 }
 
-function fit(font: PDFFont, text: string, size: number, maxW: number): string {
+export function fit(font: PDFFont, text: string, size: number, maxW: number): string {
   let t = safe(text);
   if (font.widthOfTextAtSize(t, size) <= maxW) return t;
   while (t.length > 1 && font.widthOfTextAtSize(t + "…", size) > maxW) t = t.slice(0, -1);

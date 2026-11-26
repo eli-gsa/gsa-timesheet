@@ -13,10 +13,36 @@ import {
   type HourWeek,
 } from "@/lib/hours";
 import type { AssignData } from "@/lib/hoursData";
-import { addWeeks, deleteWeek, getAssignData, setColour, setHours, updateWeek } from "@/lib/actions/hours";
+import { COMMON_CURRENCIES, DEFAULT_CURRENCY, formatNumber } from "@/lib/invoicing";
+import {
+  addWeeks,
+  deleteWeek,
+  getAssignData,
+  setBonus,
+  setBonusCurrency,
+  setBonusMany,
+  setColour,
+  setHours,
+  setHoursMany,
+  updateWeek,
+} from "@/lib/actions/hours";
+import ExportDialog from "./ExportDialog";
+import FillDialog, { type FillTarget } from "./FillDialog";
 
 type P = { id: string; name: string; color: string; active: boolean };
 type A = { id: string; name: string; active: boolean };
+type View = "hours" | "bonus" | "leads";
+type Many = { w: string; a: string; v: number | null }[];
+type FillSpec = { title: string; label: string; targets: FillTarget[] };
+
+const VIEWS: { key: View; label: string }[] = [
+  { key: "hours", label: "Hours" },
+  { key: "bonus", label: "Lead bonus" },
+  { key: "leads", label: "Number of leads" },
+];
+
+const kv = (rows: { week_id: string; agent_id: string }[], f: (r: never) => number) =>
+  Object.fromEntries(rows.map((r) => [cellKey(r.week_id, r.agent_id), f(r as never)]));
 
 export default function AssignHoursClient({
   projects,
@@ -38,6 +64,13 @@ export default function AssignHoursClient({
     Object.fromEntries(initial.logged.map((c) => [cellKey(c.week_id, c.agent_id), c.half_hours]))
   );
   const [assigned, setAssigned] = useState(initial.assigned);
+  const [rates, setRates] = useState<Record<string, number>>(() => kv(initial.rates, (r: { amount: number }) => r.amount));
+  const [leadCounts, setLeadCounts] = useState<Record<string, number>>(() =>
+    kv(initial.leadCounts, (r: { leads: number }) => r.leads)
+  );
+  const [currencies, setCurrencies] = useState<Record<string, string>>(initial.currencies);
+  const [view, setView] = useState<View>("hours");
+  const [exportOpen, setExportOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [showInactive, setShowInactive] = useState(false);
   const [brush, setBrush] = useState<string | null | undefined>(undefined); // undefined = paint off, null = eraser
@@ -51,6 +84,9 @@ export default function AssignHoursClient({
     setColours(Object.fromEntries(d.colours.map((c) => [cellKey(c.week_id, c.agent_id), c.colour])));
     setLogged(Object.fromEntries(d.logged.map((c) => [cellKey(c.week_id, c.agent_id), c.half_hours])));
     setAssigned(d.assigned);
+    setRates(kv(d.rates, (r: { amount: number }) => r.amount));
+    setLeadCounts(kv(d.leadCounts, (r: { leads: number }) => r.leads));
+    setCurrencies(d.currencies);
   }, []);
 
   // Other admins' edits show up on their own: refresh every 30s and when the tab
@@ -103,6 +139,22 @@ export default function AssignHoursClient({
     return m;
   }, [weeks]);
 
+  // Agents that appear in each campaign's tables (for the export selectors).
+  const participants = useMemo(() => {
+    const weekProject = new Map(weeks.map((w) => [w.id, w.project_id]));
+    const m = new Map<string, Set<string>>();
+    const add = (pid: string | undefined, aid: string) => {
+      if (!pid) return;
+      (m.get(pid) ?? m.set(pid, new Set()).get(pid)!).add(aid);
+    };
+    for (const a of assigned) add(a.project_id, a.agent_id);
+    for (const k of [...Object.keys(rates), ...Object.keys(leadCounts)]) {
+      const [w, a] = k.split("|");
+      add(weekProject.get(w), a);
+    }
+    return Object.fromEntries(Array.from(m, ([k, v]) => [k, Array.from(v)]));
+  }, [weeks, assigned, rates, leadCounts]);
+
   const q = search.trim().toLowerCase();
   const visible = projects.filter(
     (p) => (p.active || showInactive || weeksBy.has(p.id)) && (!q || p.name.toLowerCase().includes(q))
@@ -111,7 +163,7 @@ export default function AssignHoursClient({
   return (
     <div className="max-w-[1400px]">
       <div className="flex items-center gap-3 flex-wrap mb-3">
-        <h2 className="text-lg font-semibold tracking-tight mr-auto">Assign Hours</h2>
+        <h2 className="text-lg font-semibold tracking-tight mr-auto">Assign Hours and Lead Bonuses</h2>
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -125,6 +177,36 @@ export default function AssignHoursClient({
         <span className="text-[12px] text-[#898781] w-16 text-right">{saving > 0 ? "Saving…" : "Saved"}</span>
       </div>
 
+      <div className="flex items-center gap-3 flex-wrap mb-3">
+        <div className="inline-flex rounded-md border border-[#c3c2b7] bg-white p-0.5 text-[12.5px]" role="tablist">
+          {VIEWS.map((v) => (
+            <button
+              key={v.key}
+              role="tab"
+              aria-selected={view === v.key}
+              onClick={() => setView(v.key)}
+              className={`rounded px-3 py-1 ${view === v.key ? "bg-[#2a78d6] text-white font-semibold" : "text-[#52514e] hover:bg-[#f3f2ee]"}`}
+            >
+              {v.label}
+            </button>
+          ))}
+        </div>
+        {view !== "hours" && (
+          <button
+            onClick={() => setExportOpen(true)}
+            className="rounded-md border border-[#c3c2b7] bg-white px-2.5 py-1 text-[12.5px] hover:bg-[#f3f2ee]"
+          >
+            Export PDF…
+          </button>
+        )}
+        <span className="text-[12px] text-[#898781]">
+          {view === "hours" && "Hours assigned per agent per week."}
+          {view === "bonus" && "Bonus paid per lead, per agent per week. 0 or blank = no bonus."}
+          {view === "leads" && "Leads counted automatically from agents' timesheets (by lead date). Read-only."}
+        </span>
+      </div>
+
+      {view === "hours" && (
       <div className="flex items-center gap-1.5 flex-wrap mb-4 text-[12.5px]">
         <span className="text-[#52514e] mr-1">Colour brush:</span>
         <button
@@ -152,6 +234,7 @@ export default function AssignHoursClient({
         </button>
         {brush !== undefined && <span className="text-[#898781] ml-2">Click cells to paint. Colours are only visible to admins.</span>}
       </div>
+      )}
 
       {err && (
         <div className="mb-3 rounded-md border border-[#e5b3ad] bg-[#fbeceb] px-3 py-2 text-[13px] text-[#8a1f17]">
@@ -171,6 +254,10 @@ export default function AssignHoursClient({
             cells={cells}
             colours={colours}
             logged={logged}
+            rates={rates}
+            leadCounts={leadCounts}
+            currency={currencies[p.id] ?? DEFAULT_CURRENCY}
+            view={view}
             brush={brush}
             forceOpen={q.length > 0}
             run={run}
@@ -192,10 +279,41 @@ export default function AssignHoursClient({
                 return n;
               })
             }
+            onCells={(items) =>
+              setCells((c) => {
+                const n = { ...c };
+                for (const i of items) {
+                  if (i.v === null) delete n[cellKey(i.w, i.a)];
+                  else n[cellKey(i.w, i.a)] = i.v;
+                }
+                return n;
+              })
+            }
+            onRates={(items) =>
+              setRates((c) => {
+                const n = { ...c };
+                for (const i of items) {
+                  if (i.v === null) delete n[cellKey(i.w, i.a)];
+                  else n[cellKey(i.w, i.a)] = i.v;
+                }
+                return n;
+              })
+            }
+            onCurrency={(c) => setCurrencies((m) => ({ ...m, [p.id]: c }))}
             onWeeks={setWeeks}
           />
         ))}
       </div>
+
+      {exportOpen && (
+        <ExportDialog
+          projects={projects}
+          agents={agents}
+          weeks={weeks}
+          participants={participants}
+          onClose={() => setExportOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -208,6 +326,10 @@ function CampaignTable({
   cells,
   colours,
   logged,
+  rates,
+  leadCounts,
+  currency,
+  view,
   brush,
   forceOpen,
   run,
@@ -215,6 +337,9 @@ function CampaignTable({
   endEdit,
   onCell,
   onColour,
+  onCells,
+  onRates,
+  onCurrency,
   onWeeks,
 }: {
   project: P;
@@ -224,6 +349,10 @@ function CampaignTable({
   cells: Record<string, number>;
   colours: Record<string, string>;
   logged: Record<string, number>;
+  rates: Record<string, number>;
+  leadCounts: Record<string, number>;
+  currency: string;
+  view: View;
   brush: string | null | undefined;
   forceOpen: boolean;
   run: (fn: () => Promise<void>) => Promise<void>;
@@ -231,32 +360,67 @@ function CampaignTable({
   endEdit: () => void;
   onCell: (w: string, a: string, h: number | null) => void;
   onColour: (w: string, a: string, c: string | null) => void;
+  onCells: (items: Many) => void;
+  onRates: (items: Many) => void;
+  onCurrency: (c: string) => void;
   onWeeks: React.Dispatch<React.SetStateAction<HourWeek[]>>;
 }) {
   const [open, setOpen] = useState(weeks.length > 0);
   const [count, setCount] = useState(4);
   const [editWeek, setEditWeek] = useState<HourWeek | null>(null);
+  const [fill, setFill] = useState<FillSpec | null>(null);
   const isOpen = open || forceOpen;
+  const hoursView = view === "hours";
+  const bonusView = view === "bonus";
 
   const weekIds = useMemo(() => new Set(weeks.map((w) => w.id)), [weeks]);
 
   // Rows: agents assigned to the campaign, plus anyone (assigned or not) who
-  // holds hours in one of its weeks; those no longer assigned are greyed.
+  // holds hours, a bonus or leads in one of its weeks; those no longer assigned
+  // are greyed.
   const rows = useMemo(() => {
-    const withHours = new Set<string>();
+    const seen = new Set<string>();
     for (const k of Object.keys(cells)) {
       const [w, a] = k.split("|");
-      if (weekIds.has(w)) withHours.add(a);
+      if (weekIds.has(w)) seen.add(a);
+    }
+    for (const k of Object.keys(rates)) {
+      const [w, a] = k.split("|");
+      if (weekIds.has(w)) seen.add(a);
+    }
+    for (const [k, n] of Object.entries(leadCounts)) {
+      const [w, a] = k.split("|");
+      if (n > 0 && weekIds.has(w)) seen.add(a);
     }
     return agents
-      .filter((a) => (assignedIds.has(a.id) && a.active) || withHours.has(a.id))
+      .filter((a) => (assignedIds.has(a.id) && a.active) || seen.has(a.id))
       .map((a) => ({ ...a, unassigned: !assignedIds.has(a.id) }));
-  }, [agents, assignedIds, cells, weekIds]);
+  }, [agents, assignedIds, cells, rates, leadCounts, weekIds]);
 
-  const weekTotal = (wid: string) => rows.reduce((s, r) => s + (cells[cellKey(wid, r.id)] ?? 0), 0);
-  const weekCallers = (wid: string) => rows.filter((r) => (cells[cellKey(wid, r.id)] ?? 0) > 0).length;
-  const rowTotal = (aid: string) => weeks.reduce((s, w) => s + (cells[cellKey(w.id, aid)] ?? 0), 0);
+  const hrs = (w: string, a: string) => cells[cellKey(w, a)] ?? 0;
+  const rate = (w: string, a: string) => rates[cellKey(w, a)] ?? 0;
+  const leads = (w: string, a: string) => leadCounts[cellKey(w, a)] ?? 0;
+  const money = (w: string, a: string) => Math.round(rate(w, a) * leads(w, a) * 100) / 100;
+
+  const weekTotal = (wid: string) => rows.reduce((s, r) => s + hrs(wid, r.id), 0);
+  const weekCallers = (wid: string) => rows.filter((r) => hrs(wid, r.id) > 0).length;
+  const rowTotal = (aid: string) => weeks.reduce((s, w) => s + hrs(w.id, aid), 0);
   const grand = rows.reduce((s, r) => s + rowTotal(r.id), 0);
+
+  const weekLeads = (wid: string) => rows.reduce((s, r) => s + leads(wid, r.id), 0);
+  const rowLeads = (aid: string) => weeks.reduce((s, w) => s + leads(w.id, aid), 0);
+  const grandLeads = rows.reduce((s, r) => s + rowLeads(r.id), 0);
+  const weekMoney = (wid: string) => rows.reduce((s, r) => s + money(wid, r.id), 0);
+  const rowMoney = (aid: string) => weeks.reduce((s, w) => s + money(w.id, aid), 0);
+  const grandMoney = rows.reduce((s, r) => s + rowMoney(r.id), 0);
+
+  const active = rows.filter((r) => !r.unassigned && r.active);
+  const openFill = (title: string, label: string, ws: HourWeek[], rs: { id: string }[]) =>
+    setFill({
+      title,
+      label,
+      targets: ws.flatMap((w) => rs.map((r) => ({ w: w.id, a: r.id }))),
+    });
 
   function add(n: number) {
     run(async () => {
@@ -266,9 +430,12 @@ function CampaignTable({
     });
   }
 
+  const unit = hoursView ? "h" : bonusView ? currency : "leads";
+  const headline = hoursView ? fmtHrs(grand) : bonusView ? formatNumber(grandMoney) : String(grandLeads);
+
   return (
     <section className="rounded-lg border border-[#e1e0d9] bg-white">
-      <header className="flex items-center gap-2 px-3 py-2 border-b border-[#e1e0d9]">
+      <header className="flex items-center gap-2 px-3 py-2 border-b border-[#e1e0d9] flex-wrap">
         <button onClick={() => setOpen(!isOpen)} className="text-[12px] w-4 text-[#52514e]" aria-label="Toggle">
           {isOpen ? "▾" : "▸"}
         </button>
@@ -277,8 +444,38 @@ function CampaignTable({
           {project.name}
           {!project.active && <span className="ml-2 text-[11px] text-[#898781] font-normal">inactive</span>}
         </h3>
+        {bonusView && (
+          <label className="flex items-center gap-1.5 text-[12px] text-[#52514e]">
+            Currency
+            <select
+              value={currency}
+              onChange={(e) =>
+                run(async () => {
+                  await setBonusCurrency(project.id, e.target.value);
+                  onCurrency(e.target.value);
+                })
+              }
+              className="rounded-md border border-[#c3c2b7] bg-white px-1.5 py-1 text-[12.5px] text-[#0b0b0b]"
+            >
+              {(COMMON_CURRENCIES.includes(currency) ? COMMON_CURRENCIES : [currency, ...COMMON_CURRENCIES]).map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {!(view === "leads") && weeks.length > 0 && (
+          <button
+            onClick={() => openFill(`${project.name}: all weeks, all agents`, `${project.name} (campaign)`, weeks, active)}
+            className="rounded-md border border-[#c3c2b7] bg-white px-2 py-1 text-[12px] hover:bg-[#f3f2ee]"
+            title="Fill the whole campaign"
+          >
+            Autofill campaign
+          </button>
+        )}
         <span className="text-[12px] text-[#898781]">
-          {weeks.length} week{weeks.length === 1 ? "" : "s"} · {fmtHrs(grand)}h
+          {weeks.length} week{weeks.length === 1 ? "" : "s"} · {headline} {unit}
         </span>
       </header>
 
@@ -311,13 +508,31 @@ function CampaignTable({
                     <th className="text-left font-semibold px-2 py-1.5 border-b border-[#e1e0d9] min-w-[160px]">Agent</th>
                     {weeks.map((w) => (
                       <th key={w.id} className="px-1 py-1.5 border-b border-[#e1e0d9] min-w-[120px]">
-                        <button
-                          onClick={() => setEditWeek(w)}
-                          className="w-full rounded px-1 py-0.5 text-[12px] font-semibold hover:bg-[#f3f2ee]"
-                          title="Edit dates"
-                        >
-                          {fmtRange(w.start_date, w.end_date)}
-                        </button>
+                        <div className="flex items-center gap-0.5">
+                          <button
+                            onClick={() => setEditWeek(w)}
+                            className="flex-1 rounded px-1 py-0.5 text-[12px] font-semibold hover:bg-[#f3f2ee]"
+                            title="Edit dates"
+                          >
+                            {fmtRange(w.start_date, w.end_date)}
+                          </button>
+                          {view !== "leads" && (
+                            <button
+                              onClick={() =>
+                                openFill(
+                                  `${project.name}: ${fmtRange(w.start_date, w.end_date)}, all agents`,
+                                  `${project.name} (week ${w.start_date})`,
+                                  [w],
+                                  active
+                                )
+                              }
+                              className="rounded px-1 text-[11px] text-[#2a78d6] hover:bg-[#e8f0fb]"
+                              title="Fill this week for all agents"
+                            >
+                              Fill
+                            </button>
+                          )}
+                        </div>
                       </th>
                     ))}
                     <th className="px-2 py-1.5 border-b border-[#e1e0d9] min-w-[70px] text-right">Total</th>
@@ -334,61 +549,109 @@ function CampaignTable({
                   {rows.map((r) => (
                     <tr key={r.id} className={r.unassigned || !r.active ? "opacity-60" : ""}>
                       <td className="px-2 py-1 border-b border-[#f0efe9]">
-                        {r.name}
-                        {r.unassigned && (
-                          <span className="ml-1.5 rounded bg-[#ececE6] px-1.5 py-0.5 text-[10.5px] text-[#52514e]">Unassigned</span>
-                        )}
+                        <div className="flex items-center gap-1.5">
+                          <span>{r.name}</span>
+                          {r.unassigned && (
+                            <span className="rounded bg-[#ececE6] px-1.5 py-0.5 text-[10.5px] text-[#52514e]">Unassigned</span>
+                          )}
+                          {view !== "leads" && !r.unassigned && r.active && (
+                            <button
+                              onClick={() =>
+                                openFill(`${project.name}: ${r.name}, all weeks`, `${project.name} / ${r.name}`, weeks, [r])
+                              }
+                              className="ml-auto rounded px-1 text-[11px] text-[#2a78d6] hover:bg-[#e8f0fb]"
+                              title="Fill all weeks for this agent"
+                            >
+                              Fill
+                            </button>
+                          )}
+                        </div>
                       </td>
-                      {weeks.map((w) => (
-                        <Cell
-                          key={`${w.id}|${r.id}|${cells[cellKey(w.id, r.id)] ?? ""}`}
-                          value={cells[cellKey(w.id, r.id)]}
-                          colour={colours[cellKey(w.id, r.id)]}
-                          logged={logged[cellKey(w.id, r.id)]}
-                          brush={brush}
-                          beginEdit={beginEdit}
-                          endEdit={endEdit}
-                          onSave={(h) =>
-                            run(async () => {
-                              await setHours(w.id, r.id, h);
-                              onCell(w.id, r.id, h);
-                            })
-                          }
-                          onPaint={() => {
-                            if (brush === undefined) return;
-                            const col = brush;
-                            run(async () => {
-                              await setColour(w.id, r.id, col);
-                              onColour(w.id, r.id, col);
-                            });
-                          }}
-                        />
-                      ))}
+                      {weeks.map((w) =>
+                        hoursView ? (
+                          <Cell
+                            key={`${w.id}|${r.id}|${cells[cellKey(w.id, r.id)] ?? ""}`}
+                            value={cells[cellKey(w.id, r.id)]}
+                            colour={colours[cellKey(w.id, r.id)]}
+                            logged={logged[cellKey(w.id, r.id)]}
+                            brush={brush}
+                            beginEdit={beginEdit}
+                            endEdit={endEdit}
+                            onSave={(h) =>
+                              run(async () => {
+                                await setHours(w.id, r.id, h);
+                                onCell(w.id, r.id, h);
+                              })
+                            }
+                            onPaint={() => {
+                              if (brush === undefined) return;
+                              const col = brush;
+                              run(async () => {
+                                await setColour(w.id, r.id, col);
+                                onColour(w.id, r.id, col);
+                              });
+                            }}
+                          />
+                        ) : bonusView ? (
+                          <BonusCell
+                            key={`${w.id}|${r.id}|${rates[cellKey(w.id, r.id)] ?? ""}`}
+                            value={rates[cellKey(w.id, r.id)]}
+                            leads={leads(w.id, r.id)}
+                            beginEdit={beginEdit}
+                            endEdit={endEdit}
+                            onSave={(amt) =>
+                              run(async () => {
+                                await setBonus(w.id, r.id, amt);
+                                onRates([{ w: w.id, a: r.id, v: amt }]);
+                              })
+                            }
+                          />
+                        ) : (
+                          <td key={w.id} className="px-2 py-1 border-b border-[#f0efe9] text-center tabular-nums">
+                            {leads(w.id, r.id) || <span className="text-[#c3c2b7]">0</span>}
+                          </td>
+                        )
+                      )}
                       <td className="px-2 py-1 border-b border-[#f0efe9] text-right font-semibold tabular-nums">
-                        {fmtHrs(rowTotal(r.id))}
+                        {hoursView ? fmtHrs(rowTotal(r.id)) : bonusView ? formatNumber(rowMoney(r.id)) : rowLeads(r.id)}
                       </td>
                     </tr>
                   ))}
                 </tbody>
                 <tfoot>
                   <tr className="font-semibold">
-                    <td className="px-2 py-1.5">Total hours</td>
+                    <td className="px-2 py-1.5">{hoursView ? "Total hours" : bonusView ? `Total bonus (${currency})` : "Total leads"}</td>
                     {weeks.map((w) => (
                       <td key={w.id} className="px-2 py-1.5 text-center tabular-nums">
-                        {fmtHrs(weekTotal(w.id))}
+                        {hoursView ? fmtHrs(weekTotal(w.id)) : bonusView ? formatNumber(weekMoney(w.id)) : weekLeads(w.id)}
                       </td>
                     ))}
-                    <td className="px-2 py-1.5 text-right tabular-nums">{fmtHrs(grand)}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">
+                      {hoursView ? fmtHrs(grand) : bonusView ? formatNumber(grandMoney) : grandLeads}
+                    </td>
                   </tr>
-                  <tr className="text-[#52514e]">
-                    <td className="px-2 py-1">Callers</td>
-                    {weeks.map((w) => (
-                      <td key={w.id} className="px-2 py-1 text-center tabular-nums">
-                        {weekCallers(w.id)}
-                      </td>
-                    ))}
-                    <td />
-                  </tr>
+                  {hoursView && (
+                    <tr className="text-[#52514e]">
+                      <td className="px-2 py-1">Callers</td>
+                      {weeks.map((w) => (
+                        <td key={w.id} className="px-2 py-1 text-center tabular-nums">
+                          {weekCallers(w.id)}
+                        </td>
+                      ))}
+                      <td />
+                    </tr>
+                  )}
+                  {bonusView && (
+                    <tr className="text-[#52514e]">
+                      <td className="px-2 py-1">Leads</td>
+                      {weeks.map((w) => (
+                        <td key={w.id} className="px-2 py-1 text-center tabular-nums">
+                          {weekLeads(w.id)}
+                        </td>
+                      ))}
+                      <td className="px-2 py-1 text-right tabular-nums">{grandLeads}</td>
+                    </tr>
+                  )}
                 </tfoot>
               </table>
               <div className="mt-2 flex items-center gap-2 text-[12.5px]">
@@ -402,6 +665,35 @@ function CampaignTable({
             </>
           )}
         </div>
+      )}
+
+      {fill && (
+        <FillDialog
+          title={fill.title}
+          kind={hoursView ? "hours" : "bonus"}
+          currency={currency}
+          targets={fill.targets}
+          hasValue={(w, a) => (hoursView ? cells[cellKey(w, a)] !== undefined : rates[cellKey(w, a)] !== undefined)}
+          onClose={() => setFill(null)}
+          onApply={(chosen, value) =>
+            run(async () => {
+              if (hoursView) {
+                await setHoursMany(
+                  chosen.map((c) => ({ weekId: c.w, agentId: c.a, hours: value })),
+                  fill.label
+                );
+                onCells(chosen.map((c) => ({ w: c.w, a: c.a, v: value })));
+              } else {
+                await setBonusMany(
+                  chosen.map((c) => ({ weekId: c.w, agentId: c.a, amount: value })),
+                  fill.label
+                );
+                onRates(chosen.map((c) => ({ w: c.w, a: c.a, v: value })));
+              }
+              setFill(null);
+            })
+          }
+        />
       )}
 
       {editWeek && (
@@ -426,6 +718,60 @@ function CampaignTable({
         />
       )}
     </section>
+  );
+}
+
+// Bonus per lead for one agent in one week. Positive only; 0 or blank clears it.
+function BonusCell({
+  value,
+  leads,
+  beginEdit,
+  endEdit,
+  onSave,
+}: {
+  value: number | undefined;
+  leads: number;
+  beginEdit: () => void;
+  endEdit: () => void;
+  onSave: (amount: number | null) => void;
+}) {
+  const [text, setText] = useState(value === undefined ? "" : fmtHrs(value));
+
+  function commit() {
+    endEdit();
+    const t = text.trim();
+    const n = t === "" ? null : Number(t);
+    if (n !== null && (!Number.isFinite(n) || n < 0 || n > 999999)) {
+      setText(value === undefined ? "" : fmtHrs(value));
+      return;
+    }
+    const next = n === null || n === 0 ? null : n;
+    if ((next ?? null) === (value ?? null)) {
+      if (n === 0 || n === null) setText("");
+      return;
+    }
+    onSave(next);
+  }
+
+  const total = Math.round((value ?? 0) * leads * 100) / 100;
+  return (
+    <td className="px-1 py-1 border-b border-[#f0efe9]">
+      <input
+        value={text}
+        inputMode="decimal"
+        placeholder="0"
+        onFocus={beginEdit}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        }}
+        className="w-full rounded border border-transparent bg-transparent px-1.5 py-0.5 text-center tabular-nums placeholder:text-[#c3c2b7] hover:border-[#c3c2b7] focus:border-[#2a78d6] focus:bg-white focus:outline-none"
+      />
+      <div className="text-center text-[10.5px] leading-tight tabular-nums text-[#898781]" title="Leads in this week = total bonus">
+        ({leads} lead{leads === 1 ? "" : "s"}{value !== undefined ? ` = ${formatNumber(total)}` : ""})
+      </div>
+    </td>
   );
 }
 

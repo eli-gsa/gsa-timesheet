@@ -73,6 +73,11 @@ Total hands-on time: roughly 30–45 minutes.
      Assign Hours week (UK dates), for the hours-left strip, the Assigned Hours
      page and the admin table. One function and one index; no data changes. Run
      **before** deploying.
+   - `supabase/migrations/0015_lead_bonuses_and_groups.sql` — lead bonuses
+     (rate per lead, per agent per campaign per week, currency per campaign),
+     a `lead_date` on every lead (existing leads are back-filled), and campaign
+     groups for Reports. Additive; no existing data is changed. Run **before**
+     deploying.
    - *(Optional, only if the read-only `reporting` schema exists)*
      `supabase/reporting_views_utc.sql` — adds `timezone`, `agent_timezone`
      and `starts_at_utc` to the reporting views.

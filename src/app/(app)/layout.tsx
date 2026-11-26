@@ -54,7 +54,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           </div>
         </header>
         <div className="flex flex-1 min-h-0">
-          <nav className="w-[190px] shrink-0 border-r border-[#e1e0d9] bg-[#fcfcfb] p-2.5 flex flex-col gap-0.5 overflow-y-auto">
+          <nav className="w-[215px] shrink-0 border-r border-[#e1e0d9] bg-[#fcfcfb] p-2.5 flex flex-col gap-0.5 overflow-y-auto">
             <NavLinks role={agent.role} />
           </nav>
           <main className="flex-1 min-w-0 overflow-y-auto p-6">{children}</main>
